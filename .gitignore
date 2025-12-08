@@ -1,4 +1,4 @@
 AstroCLIP
-images/
+images/*
 *.log
 *.h5
