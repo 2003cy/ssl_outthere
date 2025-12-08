@@ -24,9 +24,9 @@ from dinov2.utils.utils import CosineScheduler
 from fvcore.common.checkpoint import PeriodicCheckpointer
 from omegaconf import OmegaConf
 
-from .data.augmentations import DataAugmentationAstroDINO
-from .data.loaders import make_data_loader, make_dataset
-from .utils import MetricLogger
+from data.augmentations import DataAugmentationAstroDINO
+from data.loaders import make_data_loader, make_dataset
+from utils import MetricLogger
 #from astroclip.env import format_with_env
 
 # PyTorch 1.12 sets this to False by default
@@ -34,7 +34,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 logger = logging.getLogger("dinov2")
 
-TRAINER_PATH = "/u/yacheng/ssl_outthere/image_encoder/astrodino/model"     #was format_with_env("{ASTROCLIP_ROOT}")
+OUTPUT_PATH = "/u/yacheng/ssl_outthere/encoder_image/astrodino/model"     #was format_with_env("{ASTROCLIP_ROOT}")
 WANDB_ENTITY_NAME = "yacheng"         #was format_with_env("{WANDB_ENTITY_NAME}")
 
 
@@ -142,7 +142,7 @@ def do_test(cfg, model, iteration, run_name):
     if distributed.is_main_process():
         iterstring = str(iteration)
         eval_dir = os.path.join(
-            TRAINER_PATH,
+            OUTPUT_PATH,
             run_name,
             "eval",
             iterstring,
@@ -173,7 +173,7 @@ def do_train(cfg, model, run_name, group_name, resume=False):
 
     checkpointer = FSDPCheckpointer(
         model,
-        f"{TRAINER_PATH}/{run_name}",
+        f"{OUTPUT_PATH}/{run_name}",
         optimizer=optimizer,
         save_to_disk=True,
     )
@@ -257,7 +257,7 @@ def do_train(cfg, model, run_name, group_name, resume=False):
             name=run_name,
             group=group_name,
             resume="allow",
-            dir=f"{TRAINER_PATH}/{run_name}",
+            dir=f"{OUTPUT_PATH}/{run_name}",
             allow_val_change=True,
         )
         wandb.run.config.update(OmegaConf.to_object(cfg))
@@ -267,7 +267,7 @@ def do_train(cfg, model, run_name, group_name, resume=False):
 
     logger.info("Starting training from iteration {}".format(start_iter))
     metrics_file = os.path.join(
-        TRAINER_PATH,
+        OUTPUT_PATH,
         run_name,
         "training_metrics.json",
     )
@@ -353,7 +353,7 @@ def main_cli(cli_args=None):
     args = get_args_parser(add_help=True).parse_args(cli_args)
 
     run_name = str(args.run_name)
-    args.output_dir = f"{TRAINER_PATH}/{run_name}"
+    args.output_dir = f"{OUTPUT_PATH}/{run_name}"
 
     cfg = setup(args)
 

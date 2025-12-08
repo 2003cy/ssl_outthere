@@ -73,7 +73,7 @@ ibot:
 # Training
 train:
   batch_size_per_gpu: 90                # 4 GPUs x 90 = 360 images/iter
-  dataset_path:  "jwst:split=train:root=/ptmp/yacheng/outthere_ssl/images/jwst/:filter=f150w"
+  dataset_path:  "jwst:split=train:root=/u/yacheng/ssl_outthere/images/jwst/:filter=f150w"
   output_dir: .
   saveckp_freq: 5                       # save every 2 epochs (config epochs below)
   seed: 0
@@ -105,7 +105,7 @@ teacher:
   warmup_teacher_temp_epochs: 10         # warmup in epochs (10k steps with OFFICIAL_EPOCH_LENGTH=1000)
 
 optim:
-  epochs: 100                             # total steps = 60k (≈ 17.3M image exposures with 288/img per step)
+  epochs: 80                             # total steps = 60k (≈ 17.3M image exposures with 288/img per step)
   weight_decay: 0.004
   weight_decay_end: 0.04
   base_lr: 6e-5                        # defined for global batch = 1024
