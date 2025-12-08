@@ -3,11 +3,13 @@ __pycache__/
 .DS_Store
 
 AstroCLIP
+
 images/north
 images/south
 images/south-train
 images/jwst
 images/cosmos2025
+images/galaxy_zoo
 
 !images/jwst/check_file.ipynb
 
@@ -18,6 +20,7 @@ images/cosmos2025
 *.fits
 *.ckpt
 *.pt
+*.gz
 
 
 
