@@ -3,8 +3,8 @@ __pycache__/
 .DS_Store
 AstroCLIP
 
-astrodino/model
-!image_encoder/astrodino/model/check_train_metric.ipynb
+encoder_image/astrodino/model
+!encoder_image/astrodino/model/check_train_metric.ipynb
 
 images/north
 images/south
