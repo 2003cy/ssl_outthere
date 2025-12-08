@@ -1,0 +1,132 @@
+# Stable training recipe for AstroDINO/iBOT on galaxy images
+# Focus: stabilize dino_global_crops_loss, slow down KoLeo early, speed up iBOT convergence
+# Notes:
+# - Works for 2–4 GPUs with LR scaled by scaling_rule. If your global batch < 1024, LR will be < base_lr accordingly.
+# - If you can use gradient accumulation to approach global batch ~= 1024, do it; otherwise this config is still stable.
+
+MODEL:
+  WEIGHTS: ''
+
+compute_precision:
+  grad_scaler: true
+  teacher:
+    backbone:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp16
+        buffer_dtype: fp32
+    dino_head:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp16
+        buffer_dtype: fp32
+    ibot_head:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp16
+        buffer_dtype: fp32
+  student:
+    backbone:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp32
+        buffer_dtype: fp32
+    dino_head:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp32
+        buffer_dtype: fp32
+    ibot_head:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp32
+        buffer_dtype: fp32
+
+# DINO head settings
+dino:
+  loss_weight: 1.1
+  head_n_prototypes: 32678   # was 65536
+  head_bottleneck_dim: 256
+  head_nlayers: 3
+  head_hidden_dim: 2048
+  koleo_loss_weight: 0.03    # was 0.1; softened to avoid over-regularization early; warmup 0->0.03 over 5-10 epochs if supported
+
+# iBOT settings
+ibot: 
+  loss_weight: 1.0
+  mask_sample_probability: 0.3          # was 0.5
+  mask_ratio_min_max:        # was [0.1, 0.5]
+  - 0.1
+  - 0.3
+  separate_head: false                  # decouple DINO vs iBOT heads for stability
+  head_n_prototypes: 32678               # add if separate head; balanced for small global batch
+  head_bottleneck_dim: 256
+  head_nlayers: 3
+  head_hidden_dim: 2048
+
+# Training
+train:
+  batch_size_per_gpu: 90                # 4 GPUs x 90 = 360 images/iter
+  dataset_path:  "jwst:split=train:root=/ptmp/yacheng/outthere_ssl/images/jwst/:filter=f150w"
+  output_dir: .
+  saveckp_freq: 5                       # save every 2 epochs (config epochs below)
+  seed: 0
+  num_workers: 16
+  OFFICIAL_EPOCH_LENGTH: 1000           
+  cache_dataset: true
+  centering: "centering"               # optional: try sinkhorn_knopp for first 5-10 epochs if code supports
+  channel: 2
+
+student:
+  arch: vit_large
+  patch_size: 10
+  drop_path_rate: 0.3
+  layerscale: 1.0e-05
+  drop_path_uniform: true
+  pretrained_weights: ''
+  ffn_layer: "mlp"
+  block_chunks: 4
+  qkv_bias: true
+  proj_bias: true
+  ffn_bias: true
+
+# Teacher schedule
+teacher:
+  momentum_teacher: 0.992                # was 0.992
+  final_momentum_teacher: 1
+  warmup_teacher_temp: 0.04              
+  teacher_temp: 0.07                     
+  warmup_teacher_temp_epochs: 10         # warmup in epochs (10k steps with OFFICIAL_EPOCH_LENGTH=1000)
+
+optim:
+  epochs: 100                             # total steps = 60k (≈ 17.3M image exposures with 288/img per step)
+  weight_decay: 0.004
+  weight_decay_end: 0.04
+  base_lr: 6e-5                        # defined for global batch = 1024
+  lr: 0.                             # will be set after applying scaling rule
+  warmup_epochs: 5                       # 5k-step LR warmup
+  min_lr: 5.0e-06                     # was 1e-6
+  clip_grad: 3.0
+  freeze_last_layer_epochs: 2            # was 1; 3-5 improves stability of heads early
+  scaling_rule: sqrt_wrt_1024            # keep; LR scales with sqrt(global_batch/1024)
+  patch_embed_lr_mult: 0.2
+  layerwise_decay: 0.9
+  adamw_beta1: 0.9
+  adamw_beta2: 0.999
+
+crops:
+  global_crops_scale: [0.8, 1.0]
+  local_crops_number: 8
+  local_crops_scale: [0.4, 0.6]
+  global_crops_size: 90
+  local_crops_size: 50
+  center_crop_size: 100
+
+evaluation:
+  eval_period_iterations: 1000           # once per epoch with OFFICIAL_EPOCH_LENGTH=1000

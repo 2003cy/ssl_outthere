@@ -1,0 +1,25 @@
+# Multi-Modal SSL Outthere
+
+This is a dev repo for multi-modal machine learning on JWST NIRISS/NIRCam images and NIRISS spectroscopy. 
+
+
+## Pretraining
+
+Currently we plan to build self-supervised models using existing training strategies:
+
+
+### Image Encoder
+
+
+
+1. *Astrodino* from [Astroclip](https://github.com/PolymathicAI/AstroCLIP), which is a modified version of [DINOv2](https://github.com/facebookresearch/dinov2/tree/main). It trains a Vision Transformer (ViT) with  self-distillation, masked-modeling, and contrastive objectives. This training strategy is further modified for NIRISS/NIRCam galaxy images.
+
+
+2. [MocoV2](https://github.com/facebookresearch/moco) used in [Stein et al. 2021](https://github.com/georgestein/ssl-legacysurvey)
+
+
+### Spectrum Encoder
+
+1. A GPT-2 based 1D transformer model trained with a masked-modeling objective ([link](https://github.com/PolymathicAI/AstroCLIP/blob/main/astroclip/models/specformer.py)).
+
+2. Current plan is to also test out an approach to train a model which takes 2D spectrograms as input, i.e. a modified ViT/ResNet model for morphology extraction from NIRISS spectra.
