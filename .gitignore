@@ -2,7 +2,7 @@
 __pycache__/
 .DS_Store
 AstroCLIP
-A_ssl_legacysurvey
+A_ssl-legacysurvey/
 
 encoder_image/astrodino/model
 !encoder_image/astrodino/model/check_train_metric.ipynb
