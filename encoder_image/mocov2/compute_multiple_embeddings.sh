@@ -2,14 +2,12 @@
 
 # define config_file list (three different configurations)
 configs=(
-    '/ptmp/yacheng/outthere_ssl/AstroCLIP/outputs/astroclip_image/astrodino_3z_band_stable/config.yaml'
-    '/ptmp/yacheng/outthere_ssl/AstroCLIP/outputs/astroclip_image/astrodino_3z_band_stable_multi_epochs/config.yaml'
+
 )
 
 # define pretrained_weights list (three different weights, corresponding to the above configurations)
 weights=(
-    '/ptmp/yacheng/outthere_ssl/AstroCLIP/outputs/astroclip_image/astrodino_3z_band_stable/eval/manual_18000/teacher_checkpoint.pth'
-    '/ptmp/yacheng/outthere_ssl/AstroCLIP/outputs/astroclip_image/astrodino_3z_band_stable_multi_epochs/eval/manual_60000/teacher_checkpoint.pth'
+
 
 )
 

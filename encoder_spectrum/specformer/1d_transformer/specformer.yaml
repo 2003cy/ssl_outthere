@@ -15,12 +15,11 @@ trainer:
         save_last: link
     # TODO: This needs to be updated with latest code
     #- class_path: PlotsCallback
-  logger:
-    class_path: CustomWandbLogger
-    init_args:
-      project: "astroclip-spectrum"
-      entity: "{WANDB_ENTITY_NAME}"
-      save_dir: ${trainer.default_root_dir}
+logger:
+  class_path: lightning.pytorch.loggers.CSVLogger
+  init_args:
+    save_dir: ${trainer.default_root_dir}
+    name: "specformer_experiment" 
 model:
   class_path: SpecFormer
   init_args:
