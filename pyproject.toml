@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "ssl_outthere"
+version = "0.0.1"
+description = "Multi modal, SSL representation learning and downstream tasks for JWST NIRISS/NIRCam images and spectra"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.8"
+authors = [ { name = "Yang Cheng", email = "yacheng@mpia.de" } ]
+license = { text = "MIT" }
+dependencies = [
+	"astropy",
+	"datasets",
+	"dinov2 @ git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069",
+	"huggingface_hub",
+	"jaxtyping",
+	"lightning[extra]",
+	"plotly",
+	"provabgs @ git+https://github.com/changhoonhahn/provabgs.git",
+	"pycairo",
+	"pyro-ppl",
+	"python-dotenv",
+	"scikit-image",
+	"scikit-learn",
+	"torchvision==0.15.0",
+	"wandb",
+    "ipykernel"
+]
+classifiers = [
+	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3.8",
+	"License :: OSI Approved :: MIT License",
+	"Operating System :: OS Independent",
+]
+
+urls = { "Homepage" = "https://github.com/2003cy/ssl_outthere", "Repository" = "https://github.com/2003cy/ssl_outthere", "Bug Tracker" = "https://github.com/2003cy/ssl_outthere/issues" }
+
+keywords = ["astronomy", "machine-learning", "self-supervised", "jwst", "image","galaxy","galaxy evolution", "spectroscopy"]
+
+license-files = ["LICENSE"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["images", "outputs", "notebooks", "data"]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "isort"]
+

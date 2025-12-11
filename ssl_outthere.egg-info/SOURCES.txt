@@ -1,0 +1,6 @@
+README.md
+setup.py
+ssl_outthere.egg-info/PKG-INFO
+ssl_outthere.egg-info/SOURCES.txt
+ssl_outthere.egg-info/dependency_links.txt
+ssl_outthere.egg-info/top_level.txt
