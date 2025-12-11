@@ -36,9 +36,9 @@ def download_spectrum(extract,home_path, remote, password):
             f'{remote_url}/{file}',
         ]
 
-        #if os.path.exists(f'data\\{field}\\{file}'):
-        #    print(f'{file}exist')
-        #    continue
+        if os.path.exists(f'data/{field}/{file}'):
+            print(f'{file}exist')
+            continue
 
         try:
             subprocess.run(command, check=True)
@@ -57,14 +57,14 @@ def main():
         '--remote',
         type=str,
         help='Remote URL',
-        default='http://outthere-mpia.org/s3/data',
+        default='https://outthere-mpia.org/s3/data',
     )
     parser.add_argument('--ncpu', type=int, default=1)
     args = parser.parse_args()
 
     # Prompt User for input
     #print('Enter the password to the remote server')
-    password = ''
+    password = 'outthere'
 
     # Load extractePd
     extracted = Table.read(args.extracted)
@@ -79,7 +79,7 @@ def main():
     home = os.getcwd()
     for field in np.unique(extracted['field']):
         os.makedirs(os.path.join(home,'data',f'{field}'), exist_ok=True)
-        os.makedirs(os.path.join(home,'png',f'{field}'), exist_ok=True)
+        #os.makedirs(os.path.join(home,'png',f'{field}'), exist_ok=True)
 
     # Multi-threaded download
     if ncpu > 1:
