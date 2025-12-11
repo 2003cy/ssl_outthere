@@ -3,18 +3,41 @@ Name: ssl_outthere
 Version: 0.0.1
 Summary: Multi modal, SSL representation learning and downstream tasks for JWST NIRISS/NIRCam images and spectra
 Author: Yang Cheng
-License: MIT
+Author-email: Yang Cheng <yacheng@mpia.de>
+License-Expression: MIT
+Project-URL: Homepage, https://github.com/2003cy/ssl_outthere
+Project-URL: Repository, https://github.com/2003cy/ssl_outthere
+Project-URL: Bug Tracker, https://github.com/2003cy/ssl_outthere/issues
+Keywords: astronomy,machine-learning,self-supervised,jwst,image,galaxy,galaxy evolution,spectroscopy
 Classifier: Programming Language :: Python :: 3
-Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Operating System :: OS Independent
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: astropy
+Requires-Dist: datasets
+Requires-Dist: dinov2@ git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069
+Requires-Dist: huggingface_hub
+Requires-Dist: jaxtyping
+Requires-Dist: lightning[extra]
+Requires-Dist: plotly
+Requires-Dist: provabgs@ git+https://github.com/changhoonhahn/provabgs.git
+Requires-Dist: pycairo
+Requires-Dist: pyro-ppl
+Requires-Dist: python-dotenv
+Requires-Dist: scikit-image
+Requires-Dist: scikit-learn
+Requires-Dist: torchvision==0.15.0
+Requires-Dist: wandb
+Requires-Dist: ipykernel
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: isort; extra == "dev"
 Dynamic: author
-Dynamic: classifier
-Dynamic: description
-Dynamic: description-content-type
-Dynamic: license
+Dynamic: license-file
 Dynamic: requires-python
-Dynamic: summary
 
 # Multi-Modal SSL Outthere
 

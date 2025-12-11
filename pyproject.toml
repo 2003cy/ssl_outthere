@@ -10,7 +10,7 @@ description = "Multi modal, SSL representation learning and downstream tasks for
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.8"
 authors = [ { name = "Yang Cheng", email = "yacheng@mpia.de" } ]
-license = { text = "MIT" }
+license = "MIT"
 dependencies = [
 	"astropy",
 	"datasets",
@@ -32,7 +32,6 @@ dependencies = [
 classifiers = [
 	"Programming Language :: Python :: 3",
 	"Programming Language :: Python :: 3.8",
-	"License :: OSI Approved :: MIT License",
 	"Operating System :: OS Independent",
 ]
 
