@@ -23,3 +23,8 @@ Currently we plan to build self-supervised models using existing training strate
 1. A GPT-2 based 1D transformer model trained with a masked-modeling objective ([link](https://github.com/PolymathicAI/AstroCLIP/blob/main/astroclip/models/specformer.py)).
 
 2. Current plan is to also test out an approach to train a model which takes 2D spectrograms as input, i.e. a modified ViT/ResNet model for morphology extraction from NIRISS spectra.
+
+
+# TODO
+
+make new single unified dataset for Outthere

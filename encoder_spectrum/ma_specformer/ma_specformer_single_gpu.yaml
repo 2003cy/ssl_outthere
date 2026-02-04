@@ -1,0 +1,76 @@
+seed_everything: 42
+
+# Model settings
+model:
+  embed_dim: 64  # Reduced from 128
+  num_layers: 4  # Reduced from 6
+  num_heads: 4  # Reduced from 8
+  mlp_ratio: 4.0
+  max_len: 2048
+  mask_ratio: 0.40  # Increased to make reconstruction harder (prevent shortcut learning)
+  min_unmasked: 10
+  dropout: 0.20  # Increased for stronger regularization
+  bias: true
+
+# Optimizer and LR Scheduler settings (LightningCLI auto-config)
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 5.0e-5  # Reduced from 1e-4 for slower, more stable learning
+    weight_decay: 0.02  # Slightly increased for regularization
+
+lr_scheduler: null  # Use custom callback instead
+
+# Data settings
+data:
+  h5_path: /u/yacheng/projects/ssl_outthere/images/OUTTHERE/spectrum/f150w.h5
+  batch_size: 128  # Increased from 64 for single GPU, better optimization
+  num_workers: 4
+  train_val_split: 0.9
+  collate_fn: null
+  valid_flux_mask_fn: null
+  use_infinite_sampler: true  # Enable infinite loop for masked modeling
+  min_snr: 2.0  # Minimum SNR threshold for filtering low-quality spectra
+
+# Trainer settings
+trainer:
+  max_epochs: 50  # Reduced from 75 for faster training with optimized model
+  accelerator: gpu
+  devices: [0]  # Use first GPU
+  strategy: auto
+  precision: 16-mixed  # Mixed precision training (faster)
+  log_every_n_steps: 10
+  val_check_interval: 0.25  # Validate 4x per epoch
+  enable_checkpointing: true
+  enable_progress_bar: true
+  default_root_dir: ./output
+  callbacks:
+    - class_path: model.callbacks.MetricsSaveCallback
+      init_args:
+        save_dir: ./metrics
+        save_every_n_steps: 10
+    - class_path: model.callbacks.WarmupCosineLRScheduler
+      init_args:
+        warmup_steps: 1000
+        base_lr: 5.0e-5  # Same as optimizer lr
+        min_lr: 1.0e-6
+        # total_steps will be auto-calculated
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: null
+        filename: "ma_specformer-{epoch:02d}-{val_loss:.4f}"
+        monitor: val_loss
+        mode: min
+        save_top_k: 3
+        save_last: true
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 10
+        mode: min
+  logger:
+    - class_path: lightning.pytorch.loggers.TensorBoardLogger
+      init_args:
+        save_dir: ./log
+        name: ma_specformer_single_gpu
+        version: null  # Auto-increment run number

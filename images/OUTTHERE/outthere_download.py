@@ -10,6 +10,16 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 # Download product with rsync
+def _looks_like_html_error(path: str) -> bool:
+    """Return True if file begins with an HTML doctype (failed download)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(200).lstrip()
+        return head.startswith(b"<!DOCTYPE HTML")
+    except OSError:
+        return False
+
+
 def download_spectrum(extract,home_path, remote, password):
     """Download product from remote server."""
 
@@ -26,25 +36,33 @@ def download_spectrum(extract,home_path, remote, password):
 
     # Execute command
     for file in files:
-        # Download command
+        path = f'data/{field}/{file}'
         command = [
             'curl',
             '-u',
             f'outthere:{password}',
             '-o',
-            f'data/{field}/{file}',
+            path,
             f'{remote_url}/{file}',
         ]
 
-        if os.path.exists(f'data/{field}/{file}'):
-            print(f'{file}exist')
+        if os.path.exists(path) and not _looks_like_html_error(path):
+            print(f'{file} exists and looks ok')
             continue
 
-        try:
-            subprocess.run(command, check=True)
-            print(f'\n download {file} downloaded \n')
-        except subprocess.CalledProcessError as e:
-            print(f'Failed to download {file}. Error: {e}')
+        # Retry download up to two attempts if the result is an HTML error page
+        for attempt in range(2):
+            try:
+                subprocess.run(command, check=True)
+                if _looks_like_html_error(path):
+                    print(f'{file} seems to be an HTML error page; retrying ({attempt+1}/2)')
+                    continue
+                print(f'\n download {file} downloaded \n')
+                break
+            except subprocess.CalledProcessError as e:
+                print(f'Failed to download {file}. Error: {e}')
+        else:
+            print(f'{file} could not be downloaded successfully after retries')
 
 
 # Main Function

@@ -1,13 +1,11 @@
 from typing import Callable, Dict, List
-
+import numpy as np
 import datasets
 import lightning as L
 import torch
 from torch import Tensor
 from torch.utils.data.dataloader import default_collate
 from torchvision.transforms import CenterCrop
-
-from ..astrodino.data.augmentations import ToRGB
 
 
 class AstroClipDataloader(L.LightningDataModule):
@@ -74,3 +72,42 @@ class AstroClipCollator:
         # process images
         samples["image"] = self._process_images(samples["image"])
         return samples
+
+
+
+class ToRGB:
+    """
+    Stretch a single-band cutout and broadcast it to RGB by cloning the channel
+    after applying a simple arcsinh stretch (mirrors ToRGB logic but mono-band).
+    """
+
+    def __init__(self, scale: float = 1.0, m: float = 0.03, Q: float = 20.0, return_channel_pos: int = 0):
+        self.scale = scale
+        self.m = m
+        self.Q = Q
+        self._return_channel_pos = return_channel_pos
+        
+    def __call__(self, imgs: np.ndarray) -> np.ndarray:
+        return_channel_pos = self._return_channel_pos
+        # Accept HxW, 1xHxW, or 3xHxW inputs (already channel-first)
+        arr = np.asarray(imgs, dtype=np.float32)
+        if arr.ndim == 3:
+            base = arr[0]
+        elif arr.ndim == 2:
+            base = arr
+        else:
+            base = arr.squeeze()
+
+        base = np.maximum(0.0, base * self.scale + self.m)
+        I = base
+        I += (I == 0.0) * 1e-6
+        fI = np.arcsinh(self.Q * I) / np.sqrt(self.Q + 1e-8)
+        stretched = np.clip(base * fI / I, 0.0, 1.0).astype(np.float32)
+
+        # Repeat into three identical channels; DataAugmentation converts to CHW later.
+        rgb = np.stack((stretched, stretched, stretched), axis=-1)
+        if return_channel_pos == 0:
+            rgb = np.transpose(rgb, (2, 0, 1))  # C x H x W
+            return rgb
+        elif return_channel_pos == 2:
+            return rgb

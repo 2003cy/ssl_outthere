@@ -1,0 +1,76 @@
+# Random seed for reproducibility
+seed_everything: 42
+
+# Trainer settings
+trainer:
+  max_epochs: 50  # Reduced from 80 to prevent overfitting on limited data
+  accelerator: gpu
+  devices: [0, 1]  # Use GPU 0 and 1, modify as needed
+  strategy: ddp  # Distributed Data Parallel
+  precision: 16-mixed  # Mixed precision training (faster)
+  log_every_n_steps: 10
+  val_check_interval: 0.25  # More frequent validation (4x per epoch)
+  enable_checkpointing: true
+  enable_progress_bar: true
+  default_root_dir: ./output
+  sync_batchnorm: true  # Synchronize batch norm (recommended for multi-GPU)
+  callbacks:
+    - class_path: model.callbacks.MetricsSaveCallback
+      init_args:
+        save_dir: ./metrics
+        save_every_n_steps: 10
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: null
+        filename: "ma_specformer-{epoch:02d}-{val_loss:.4f}"
+        monitor: val_loss
+        mode: min
+        save_top_k: 3
+        save_last: true
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 10
+        mode: min
+  logger:
+    - class_path: lightning.pytorch.loggers.TensorBoardLogger
+      init_args:
+        save_dir: ./log
+        name: ma_specformer_multi_gpu
+        version: null  # Auto-increment run number
+
+# Model settings
+model:
+  embed_dim: 64  # Reduced from 128 to prevent overfitting (2.14x -> 12.37x data/param ratio)
+  num_layers: 4  # Reduced from 6 for smaller model
+  num_heads: 4  # Reduced from 8 to match embed_dim
+  mlp_ratio: 4.0
+  max_len: 2048
+  mask_ratio: 0.25  # Increased from 0.20 for stronger self-supervision
+  min_unmasked: 10  # Preserve context for reconstruction feasibility
+  normalize: true  # Per-sample normalization (specformer style)
+  min_std: 0.2  # Minimum std for normalization
+  dropout: 0.15  # Increased from 0.1 for better regularization
+  bias: true
+
+# Optimizer and LR Scheduler settings (LightningCLI auto-config)
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1.0e-4
+    weight_decay: 0.01
+
+lr_scheduler:
+  class_path: torch.optim.lr_scheduler.CosineAnnealingLR
+  init_args:
+    T_max: 50  # Same as max_epochs
+    eta_min: 1.0e-6
+
+# Data settingsdata:
+  h5_path: /u/yacheng/projects/ssl_outthere/images/OUTTHERE/spectrum/f115w.h5
+  batch_size: 128  # Multi-GPU optimized (128/2=64 per GPU)
+  num_workers: 8
+  train_val_split: 0.9
+  collate_fn: null
+  valid_flux_mask_fn: null
+  use_infinite_sampler: true  # Enable infinite loop sampling for masked modeling

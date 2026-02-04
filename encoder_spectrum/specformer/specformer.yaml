@@ -1,6 +1,6 @@
 seed_everything: 42
 trainer:
-  default_root_dir: "{ASTROCLIP_ROOT}/outputs"
+  default_root_dir: "~/projects/ssl_outthere/encoder_spectrum/specformer/1d_transformer/model"
   enable_checkpointing: true
   gradient_clip_val: 1.
   max_steps: 500_000

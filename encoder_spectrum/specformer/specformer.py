@@ -101,7 +101,7 @@ class SpecFormer(L.LightningModule):
         target = torch.clone(input)
 
         # mask parts of the input
-        input = self.mask_sequence(input)
+        input = self.zzl(input)
 
         # forward pass
         output = self.forward_without_preprocessing(input)["reconstructions"]
