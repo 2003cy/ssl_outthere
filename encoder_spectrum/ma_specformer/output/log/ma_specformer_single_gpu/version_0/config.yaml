@@ -1,0 +1,139 @@
+# lightning.pytorch==2.3.3
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  strategy: auto
+  devices:
+  - 0
+  num_nodes: 1
+  precision: 16-mixed
+  logger:
+  - class_path: lightning.pytorch.loggers.TensorBoardLogger
+    init_args:
+      save_dir: ./output/log
+      name: ma_specformer_single_gpu
+      version: null
+      log_graph: false
+      default_hp_metric: true
+      prefix: ''
+      sub_dir: null
+      logdir: null
+      comment: ''
+      purge_step: null
+      max_queue: 10
+      flush_secs: 120
+      filename_suffix: ''
+      write_to_disk: true
+      comet_config:
+        disabled: true
+  callbacks:
+  - class_path: model.callbacks.MetricsSaveCallback
+    init_args:
+      save_dir: ./output/metrics
+      save_every_n_steps: 10
+      log_grad_norm: true
+  - class_path: model.callbacks.WarmupCosineLRScheduler
+    init_args:
+      warmup_steps: 500
+      base_lr: 0.0001
+      min_lr: 1.0e-06
+      total_steps: null
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      dirpath: ./output/checkpoints
+      filename: ma_specformer-{epoch:02d}-{val_loss:.4f}
+      monitor: val_loss
+      verbose: false
+      save_last: true
+      save_top_k: 3
+      save_weights_only: false
+      mode: min
+      auto_insert_metric_name: true
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: null
+      enable_version_counter: true
+  - class_path: lightning.pytorch.callbacks.EarlyStopping
+    init_args:
+      monitor: val_loss
+      min_delta: 0.0
+      patience: 10
+      verbose: false
+      mode: min
+      strict: true
+      check_finite: true
+      stopping_threshold: null
+      divergence_threshold: null
+      check_on_train_epoch_end: null
+      log_rank_zero_only: false
+  fast_dev_run: false
+  max_epochs: 50
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: 0.25
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: null
+  log_every_n_steps: 10
+  enable_checkpointing: true
+  enable_progress_bar: true
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: null
+  gradient_clip_algorithm: null
+  deterministic: null
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: true
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: ./output
+model:
+  embed_dim: 12
+  num_layers: 2
+  num_heads: 3
+  mlp_ratio: 3.0
+  max_len: 2048
+  mask_ratio: 0.3
+  min_unmasked: 10
+  dropout: 0.15
+  bias: true
+  normalize: true
+  min_std: 0.2
+data:
+  h5_path: /u/yacheng/projects/ssl_outthere/images/OUTTHERE/spectrum/f150w.h5
+  batch_size: 128
+  num_workers: 4
+  train_val_split: 0.9
+  collate_fn: null
+  valid_flux_mask_fn: null
+  use_infinite_sampler: true
+  min_snr: 2.0
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 0.0001
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    weight_decay: 0.01
+    amsgrad: false
+    maximize: false
+    foreach: null
+    capturable: false
+    differentiable: false
+    fused: null
+lr_scheduler: null
+ckpt_path: null

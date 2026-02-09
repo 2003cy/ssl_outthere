@@ -12,8 +12,7 @@ from omegaconf import OmegaConf
 from torchvision import transforms
 from tqdm import tqdm
 
-from astroclip.env import format_with_env
-from astroclip.astrodino.data.augmentations import ToRGB
+from encoder_image.astrodino.train.data.augmentations import ToRGB
 
 
 def _load_file_map(file_map_path: str) -> Dict[int, str]:
