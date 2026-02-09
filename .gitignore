@@ -1,6 +1,7 @@
 .ipynb_checkpoints/
 __pycache__/
 .DS_Store
+.vscode/
 AstroCLIP
 A_ssl-legacysurvey/
 
