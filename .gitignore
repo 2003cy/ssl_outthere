@@ -4,7 +4,7 @@ __pycache__/
 .vscode/
 AstroCLIP
 A_ssl-legacysurvey/
-
+encoder_spectrum/ma_specformer/output
 encoder_image/astrodino/model
 !encoder_image/astrodino/model/check_train_metric.ipynb
 
