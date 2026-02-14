@@ -81,6 +81,7 @@ student:
   qkv_bias: true
   proj_bias: true
   ffn_bias: true
+  num_register_tokens: 7  # Fix xFormers CUDA warp alignment: (144/12)^2+1+7=152 (divisible by 8)
 teacher:
   momentum_teacher: 0.992
   final_momentum_teacher: 1

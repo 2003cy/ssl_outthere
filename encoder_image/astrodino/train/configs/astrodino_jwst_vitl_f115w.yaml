@@ -95,6 +95,7 @@ student:
   qkv_bias: true
   proj_bias: true
   ffn_bias: true
+  num_register_tokens: 6  # Fix xFormers CUDA warp alignment: (90/10)^2+1+6=88 (divisible by 8)
 
 # Teacher schedule
 teacher:
