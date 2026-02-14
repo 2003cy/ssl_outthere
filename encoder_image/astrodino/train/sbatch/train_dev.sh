@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -t 00:14:00
+#SBATCH -t 00:05:00
 #SBATCH --nodes=1
 #SBATCH --partition=gpudev  # Use the GPU development partition
 #SBATCH --constraint="gpu"   #   providing GPUs.
@@ -7,7 +7,7 @@
 #SBATCH --tasks-per-node=4  #   running 4 tasks per node, each with 1 GPU.
 #SBATCH --cpus-per-task=18   #   using 18 cores each.
 #SBATCH --mem=500000
-#SBATCH --output=/u/yacheng/ssl_outthere/train_test-%j.log
+#SBATCH --output=/u/yacheng/projects/ssl_outthere/train_test-%j.log
 
 #SBATCH --mail-type=none
 #SBATCH --mail-user=yacheng@mpia.de
@@ -17,8 +17,8 @@ module load anaconda/3/2023.03
 module load cuda/12.6
 #module load gcc
 
-run_name="astrodino_f115w_vitl_test"
-config="/u/yacheng/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vitl_f115w.yaml"
+run_name="astrodino_f150w_vitb_dev"
+config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vitb_f150w.yaml"
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
@@ -26,7 +26,7 @@ source /mpcdf/soft/SLE_15/packages/x86_64/anaconda/3/2023.03/etc/profile.d/conda
 
 conda activate astrodino
 
-cd /u/yacheng/ssl_outthere/encoder_image/astrodino/train
+cd /u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train
 
 srun python -m trainer \
     --config-file=$config --run-name=$run_name

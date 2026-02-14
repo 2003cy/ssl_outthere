@@ -34,7 +34,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 logger = logging.getLogger("dinov2")
 
-OUTPUT_PATH = "/u/yacheng/ssl_outthere/encoder_image/astrodino/model"     #was format_with_env("{ASTROCLIP_ROOT}")
+OUTPUT_PATH = "/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/model"     #was format_with_env("{ASTROCLIP_ROOT}")
 WANDB_ENTITY_NAME = "yacheng"         #was format_with_env("{WANDB_ENTITY_NAME}")
 
 
@@ -207,8 +207,6 @@ def do_train(cfg, model, run_name, group_name, resume=False):
 
     # Apply custom data augmentations for astro
     data_transform = DataAugmentationAstroDINO(
-        cfg.crops.global_crops_scale,
-        cfg.crops.local_crops_scale,
         cfg.crops.local_crops_number,
         global_crops_size=cfg.crops.global_crops_size,
         local_crops_size=cfg.crops.local_crops_size,

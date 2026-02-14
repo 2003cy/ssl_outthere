@@ -240,7 +240,8 @@ class MASpecFormer(L.LightningModule):
         
         # Reconstruction head
         reconstructions = self.head(x).squeeze(-1)  # (B, T)
-
+        #TODO put mean and std back?
+        #mean std is there to put bakc
         return {
             "reconstructions": reconstructions,
             "embedding": x,

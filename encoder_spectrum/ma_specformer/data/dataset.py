@@ -29,7 +29,7 @@ class MASpectrumDataset(Dataset):
         valid_flux_mask_fn: Function to compute valid_mask from flux.
                             Default: exclude 0, -99, and non-finite values.
         min_snr: Minimum SNR threshold. Samples with SNR < min_snr are excluded.
-                 Default: None (no filtering).
+                Default: None (no filtering).
     """
 
     FILL_VALUE = np.float32(-99.0)

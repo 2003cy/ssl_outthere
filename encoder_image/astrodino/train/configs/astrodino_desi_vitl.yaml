@@ -121,9 +121,7 @@ optim:
   adamw_beta2: 0.999
 
 crops:
-  global_crops_scale: [0.8, 1.0]
   local_crops_number: 8
-  local_crops_scale: [0.4, 0.6]
   global_crops_size: 144
   local_crops_size: 60
   center_crop_size: 150

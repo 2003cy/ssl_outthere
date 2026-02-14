@@ -51,10 +51,10 @@ compute_precision:
 # DINO head settings
 dino:
   loss_weight: 1.1
-  head_n_prototypes: 32678   # was 65536
-  head_bottleneck_dim: 256
+  head_n_prototypes: 16384   # scaled for embed_dim=384 (ratio ~43x)
+  head_bottleneck_dim: 192   # should be smaller than embed_dim
   head_nlayers: 3
-  head_hidden_dim: 2048
+  head_hidden_dim: 768       # reduced to match smaller model
   koleo_loss_weight: 0.03    # was 0.1; softened to avoid over-regularization early; warmup 0->0.03 over 5-10 epochs if supported
 
 # iBOT settings
@@ -64,16 +64,16 @@ ibot:
   mask_ratio_min_max:        # was [0.1, 0.5]
   - 0.1
   - 0.3
-  separate_head: false                  # decouple DINO vs iBOT heads for stability
-  head_n_prototypes: 32678               # add if separate head; balanced for small global batch
-  head_bottleneck_dim: 256
+  separate_head: false                  # shared head with DINO
+  head_n_prototypes: 16384               # keep consistent with DINO
+  head_bottleneck_dim: 192
   head_nlayers: 3
-  head_hidden_dim: 2048
+  head_hidden_dim: 768
 
 # Training
 train:
   batch_size_per_gpu: 90                # 4 GPUs x 90 = 360 images/iter
-  dataset_path:  "jwst:split=train:root=/u/yacheng/ssl_outthere/images/jwst/:filter=f150w"
+  dataset_path:  "jwst:split=train:root=/u/yacheng/projects/ssl_outthere/images/jwst/:filter=f150w"
   output_dir: .
   saveckp_freq: 5                       # save every 2 epochs (config epochs below)
   seed: 0
@@ -84,8 +84,10 @@ train:
   channel: 2
 
 student:
-  arch: vit_large
-  patch_size: 10
+  arch: vit_small
+  patch_size: 8
+  embed_dim: 384
+  num_heads: 6          
   drop_path_rate: 0.3
   layerscale: 1.0e-05
   drop_path_uniform: true
@@ -95,6 +97,7 @@ student:
   qkv_bias: true
   proj_bias: true
   ffn_bias: true
+  num_register_tokens: 7   # Fix xFormers alignment: makes seq_len divisible by 8
 
 # Teacher schedule
 teacher:
@@ -105,7 +108,7 @@ teacher:
   warmup_teacher_temp_epochs: 10         # warmup in epochs (10k steps with OFFICIAL_EPOCH_LENGTH=1000)
 
 optim:
-  epochs: 80                             # total steps = 60k (≈ 17.3M image exposures with 288/img per step)
+  epochs: 150                            # total steps = 60k (≈ 17.3M image exposures with 288/img per step)
   weight_decay: 0.004
   weight_decay_end: 0.04
   base_lr: 6e-5                        # defined for global batch = 1024
@@ -121,11 +124,9 @@ optim:
   adamw_beta2: 0.999
 
 crops:
-  global_crops_scale: [0.8, 1.0]
   local_crops_number: 8
-  local_crops_scale: [0.4, 0.6]
-  global_crops_size: 90
-  local_crops_size: 50
+  global_crops_size: 64   # Changed from 72 to ensure (64/8)^2+1+7=72 tokens (divisible by 8)
+  local_crops_size: 32    # (32/8)^2+1+7=24 tokens (divisible by 8)
   center_crop_size: 100
 
 evaluation:

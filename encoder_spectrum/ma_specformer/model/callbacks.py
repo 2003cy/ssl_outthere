@@ -131,7 +131,11 @@ class WarmupCosineLRScheduler(L.Callback):
     def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
         """Set total steps if not provided."""
         if self.total_steps is None:
-            self.total_steps = trainer.max_steps or (trainer.max_epochs * len(trainer.train_dataloader))
+            # Note: trainer.max_steps is -1 when not set, so we need to check for > 0
+            if trainer.max_steps is not None and trainer.max_steps > 0:
+                self.total_steps = trainer.max_steps
+            else:
+                self.total_steps = trainer.max_epochs * len(trainer.train_dataloader)
         print(f"LR Scheduler: warmup_steps={self.warmup_steps}, total_steps={self.total_steps}")
 
     def on_train_batch_start(

@@ -18,15 +18,11 @@ logger = logging.getLogger("dinov2")
 class DataAugmentationAstroDINO(object):
     def __init__(
         self,
-        global_crops_scale,
-        local_crops_scale,
         local_crops_number,
         global_crops_size=144,
         local_crops_size=60,
         center_crop_size: int = -1
     ):
-        self.global_crops_scale = global_crops_scale
-        self.local_crops_scale = local_crops_scale
         self.local_crops_number = local_crops_number
         self.global_crops_size = global_crops_size
         self.local_crops_size = local_crops_size
@@ -46,8 +42,6 @@ class DataAugmentationAstroDINO(object):
 
         logger.info("###################################")
         logger.info("Using data augmentation parameters:")
-        logger.info(f"global_crops_scale: {global_crops_scale}")
-        logger.info(f"local_crops_scale: {local_crops_scale}")
         logger.info(f"local_crops_number: {local_crops_number}")
         logger.info(f"global_crops_size: {global_crops_size}")
         logger.info(f"local_crops_size: {local_crops_size}")
