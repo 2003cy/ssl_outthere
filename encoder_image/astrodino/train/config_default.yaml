@@ -81,6 +81,7 @@ student:
   qkv_bias: true
   proj_bias: true
   ffn_bias: true
+  num_register_tokens: 7  # Fix xFormers CUDA warp alignment: (144/12)^2+1+7=152 (divisible by 8)
 teacher:
   momentum_teacher: 0.992
   final_momentum_teacher: 1
@@ -103,13 +104,7 @@ optim:
   adamw_beta1: 0.9
   adamw_beta2: 0.999
 crops:
-  global_crops_scale:
-  - 0.8
-  - 1.0
   local_crops_number: 8
-  local_crops_scale:
-  - 0.4
-  - 0.6
   global_crops_size: 144 # was 224
   local_crops_size: 60 # 96
 evaluation:

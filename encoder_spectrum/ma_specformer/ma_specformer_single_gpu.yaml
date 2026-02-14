@@ -16,7 +16,7 @@ model:
 optimizer:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 1.0e-4  # Higher lr for small model - faster convergence
+    lr: 1.0e-2  # Higher lr for small model - faster convergence
     weight_decay: 0.01  # Moderate regularization
 
 lr_scheduler: null  # Use custom callback instead

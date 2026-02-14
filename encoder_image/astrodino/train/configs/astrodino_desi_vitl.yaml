@@ -95,6 +95,7 @@ student:
   qkv_bias: true
   proj_bias: true
   ffn_bias: true
+  num_register_tokens: 7  # Fix xFormers CUDA warp alignment: (144/12)^2+1+7=152 (divisible by 8)
 
 # Teacher schedule
 teacher:
@@ -121,9 +122,7 @@ optim:
   adamw_beta2: 0.999
 
 crops:
-  global_crops_scale: [0.8, 1.0]
   local_crops_number: 8
-  local_crops_scale: [0.4, 0.6]
   global_crops_size: 144
   local_crops_size: 60
   center_crop_size: 150
