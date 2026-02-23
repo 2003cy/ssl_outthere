@@ -25,6 +25,7 @@ images/galaxy_zoo
 *.ckpt
 *.pt
 *.gz
+*.png
 
 
 
