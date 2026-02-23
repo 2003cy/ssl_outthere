@@ -84,10 +84,8 @@ train:
   channel: 2
 
 student:
-  arch: vit_small
+  arch: vit_base
   patch_size: 8
-  embed_dim: 384
-  num_heads: 6          
   drop_path_rate: 0.3
   layerscale: 1.0e-05
   drop_path_uniform: true
