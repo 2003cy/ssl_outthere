@@ -17,6 +17,7 @@ def stat_and_plot(metrics_history):
 
     Args:
         metrics_history: List of dicts, each containing metrics logged at a training step.
+                        New format: {'epoch': int, 'step': int, 'metrics': {...}}
     """
 # Section 4: Build DataFrame with all metrics
 
@@ -24,8 +25,7 @@ def stat_and_plot(metrics_history):
     for e in metrics_history:
         row = {
             'epoch': e.get('epoch'),
-            'global_step': e.get('global_step'),
-            'batch_idx': e.get('batch_idx')
+            'global_step': e.get('step'),  # New format uses 'step'
         }
         metrics = e.get('metrics', {}) or {}
         # Flatten all metric keys dynamically
@@ -37,12 +37,12 @@ def stat_and_plot(metrics_history):
     # ensure numeric and sorted by step
     df = df.sort_values('global_step').reset_index(drop=True)
     print('DataFrame shape:', df.shape)
-    print('Available metrics:', [c for c in df.columns if c not in ['epoch', 'global_step', 'batch_idx']])
+    print('Available metrics:', [c for c in df.columns if c not in ['epoch', 'global_step']])
 
     # Section 5: Epoch-level aggregation (mean, median, std)
 
     # Get numeric columns that are actual metrics
-    metric_cols = [c for c in df.columns if c not in ['epoch', 'global_step', 'batch_idx']]
+    metric_cols = [c for c in df.columns if c not in ['epoch', 'global_step']]
 
     # Build aggregation dict dynamically
     agg_dict = {}
@@ -101,7 +101,7 @@ def stat_and_plot(metrics_history):
     # New plotting: multiple subplots — each subplot shows all variants for a metric vs global_step
 
     # Determine metric base names (exclude index/helper cols)
-    exclude = {'epoch','global_step','batch_idx','abs_diff'}
+    exclude = {'epoch','global_step','abs_diff'}
     metric_cols = [c for c in df.columns if c not in exclude]
     # normalize col naming to find bases (remove _sma/_ewm/_diff suffixes)
     bases = []

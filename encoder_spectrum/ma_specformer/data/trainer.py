@@ -20,18 +20,10 @@ def main():
     # Enable TensorCore optimization for NVIDIA GPUs with Tensor Cores
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
-    
-    # Create CLI with seed_everything support
-    # LightningCLI automatically handles:
-    # - Model initialization from config
-    # - DataModule initialization from config
-    # - Trainer initialization from config
-    # - Training/validation/testing workflow
-    # - Seed control via trainer.seed_everything
     cli = LightningCLI(
         MASpecFormer,
         MASpectrumDataModule,
-        seed_everything_default=42,  # Default seed value
+        save_config_callback=None,  # We use RunManager to save config
     )
 
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Add axis_ratio (b_image / a_image) into HDF5 files from primary catalog.
+Add axis_ratio, axis_ratio_err, radius_sersic, radius_sersic_err into HDF5 files from primary catalog.
 
 Usage:
-  python add_axis_ratio_to_h5.py \
+~/conda-envs/astrodino/bin/python add_sersic_morph_to_h5.py \
       --primary COSMOSWeb_mastercatalog_v1_photom_primary.fits \
-      --h5-dir images/jwst/f150w --overwrite
+      --h5-dir ../jwst/f150w --overwrite
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 
 def process_h5_file(fn, primary_cat, id_to_row_idx, args):
-    """Process a single HDF5 file: add axis_ratio."""
+    """Process a single HDF5 file: add axis_ratio, axis_ratio_err, radius_sersic, radius_sersic_err."""
     with h5py.File(fn, 'r+') as h5f:
         if args.id_col not in h5f:
             return fn
@@ -30,31 +30,40 @@ def process_h5_file(fn, primary_cat, id_to_row_idx, args):
         ids = h5f[args.id_col][:]
         n = len(ids)
         
-        ds_name = 'axis_ratio'
+        # Define datasets to add: (h5_name, catalog_col)
+        datasets = [
+            ('axis_ratio', 'axratio_sersic'),
+            ('axis_ratio_err', 'axratio_sersic_err'),
+            ('radius_sersic', 'radius_sersic'),
+            ('radius_sersic_err', 'radius_sersic_err'),
+        ]
         
-        # skip if dataset already exists (unless overwrite)
-        if ds_name in h5f:
-            if not args.overwrite:
-                return fn
-            else:
+        # Check if all datasets exist (skip if not overwriting)
+        if not args.overwrite and all(ds_name in h5f for ds_name, _ in datasets):
+            return fn
+        
+        # Remove existing datasets if overwriting
+        for ds_name, _ in datasets:
+            if ds_name in h5f and args.overwrite:
                 del h5f[ds_name]
         
-        # create and fill array
-        arr = np.full((n,), np.nan, dtype=np.float32)
+        # Create and fill arrays
+        arrays = {ds_name: np.full((n,), np.nan, dtype=np.float32) for ds_name, _ in datasets}
+        
         for i, vid in enumerate(ids):
             key = int(vid)
             if key in id_to_row_idx:
                 row_idx = id_to_row_idx[key]
-                try:
-                    a = float(primary_cat['a_image'][row_idx])
-                    b = float(primary_cat['b_image'][row_idx])
-                    if a > 0:
-                        arr[i] = b / a
-                except (ValueError, TypeError):
-                    arr[i] = np.nan
+                for ds_name, cat_col in datasets:
+                    try:
+                        arrays[ds_name][i] = float(primary_cat[cat_col][row_idx])
+                    except (ValueError, TypeError):
+                        arrays[ds_name][i] = np.nan
         
-        # write dataset
-        h5f.create_dataset(ds_name, data=arr, chunks=(min(256, n),))
+        # Write datasets
+        for ds_name, _ in datasets:
+            if ds_name not in h5f:
+                h5f.create_dataset(ds_name, data=arrays[ds_name], chunks=(min(256, n),))
     
     return fn
 
@@ -73,7 +82,7 @@ def main():
     primary_cat = Table.read(args.primary)
     
     # check required columns
-    for col in [args.id_col, 'a_image', 'b_image']:
+    for col in [args.id_col, 'axratio_sersic', 'axratio_sersic_err', 'radius_sersic', 'radius_sersic_err']:
         if col not in primary_cat.colnames:
             raise SystemExit(f"Column '{col}' not found in catalog. Available: {primary_cat.colnames[:20]}...")
 

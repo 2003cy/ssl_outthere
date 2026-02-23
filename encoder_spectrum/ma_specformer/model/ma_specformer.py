@@ -34,11 +34,11 @@ class MASpecFormer(L.LightningModule):
         dropout: float = 0.1,
         bias: bool = True,
         normalize: bool = True,  # Whether to normalize flux by default
-        min_std: float = 0.2,  # Minimum std for normalization (avoid div by zero and unstable gradients)
+        min_std: float = 0.1,  # Minimum std for normalization (avoid div by zero and unstable gradients)
     ):
         """
         Args:
-            embed_dim: Embedding dimension
+            embed_dim: Embedding dime'nsion
             num_layers: Number of transformer blocks
             num_heads: Number of attention heads
             mlp_ratio: Hidden layer ratio in MLP
@@ -56,9 +56,16 @@ class MASpecFormer(L.LightningModule):
         self.embed_dim = embed_dim
         self.num_layers = num_layers
         self.num_heads = num_heads
+        
 
-        # Token embedding: flux plus per-spectrum mean/std -> embed_dim
-        self.token_embed = nn.Linear(3, embed_dim)
+        # Token embedding: normalized flux only -> embed_dim
+        self.token_embed = nn.Linear(1, embed_dim)
+        
+        # CLS token: learnable embedding
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        
+        # Stats embedding: project mean/std to embed_dim for CLS token
+        self.stats_embed = nn.Linear(2, embed_dim)
 
         # Position encoding: Fourier features from wavelength
         # We'll create continuous encodings at forward time (see _wavelength_positional_encoding)
@@ -93,6 +100,9 @@ class MASpecFormer(L.LightningModule):
                 nn.init.trunc_normal_(m.weight, std=std, a=-3 * std, b=3 * std)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
+        
+        # Initialize CLS token
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
 
         # Apply depth-aware scaling to transformer blocks
         self.blocks.apply(lambda m: _init_by_depth(m, 1.0 / self.num_layers))
@@ -155,65 +165,71 @@ class MASpecFormer(L.LightningModule):
         flux: Tensor,
         wavelengths: Tensor,
         valid_mask: Optional[Tensor] = None,
-        normalize: Optional[bool] = True,
+        stats: Optional[Tensor] = None,  # (B, 2) with [mean, std] if provided
+        return_cls_only: bool = False,
     ) -> Tensor:
         """Encode flux and wavelengths into embeddings.
         
         This method can be used directly to extract embeddings for downstream tasks.
-        By default, normalization is automatically applied inside this method.
+        Inputs must already be normalized per sample; the model no longer
+        performs normalization internally.
         
         Args:
-            flux: shape (B, T), flux values (raw or pre-normalized)
+            flux: shape (B, T), normalized flux values
             wavelengths: shape (B, T), wavelength values
             valid_mask: shape (B, T), bool (True = valid, False = invalid/padding)
                         Invalid positions are masked in attention (cannot be attended to)
-            normalize: default True, whether to normalize flux internally.
-                      If None, uses self.hparams.normalize (default from __init__)
+            stats: shape (B, 2), per-sample [mean, std] stats to inject into CLS.
+                   Defaults to zeros when not provided.
+            return_cls_only: If True, return only CLS token embedding (B, embed_dim)
         
         Returns:
-            embeddings: shape (B, T, embed_dim), transformer output embeddings
+            If return_cls_only=False:
+                embeddings: shape (B, T+1, embed_dim), transformer output embeddings
+                            Index 0 is CLS token, indices 1: are flux tokens
+            If return_cls_only=True:
+                cls_embedding: shape (B, embed_dim), global spectrum embedding
         """
         B, T = flux.shape
+        flux_norm = flux
 
-        # Use model's default normalize setting if not specified
-        if self.hparams.normalize is False:
-            normalize = False
-
-        # Normalize flux and get stats
-        if normalize:
-            flux_norm, mean, std = self._normalize_flux(flux, valid_mask)
-            stats = torch.cat([mean, std], dim=-1)  # (B, 2)
-        else:
-            # No normalization, use raw flux and dummy stats
-            flux_norm = flux
-            stats = torch.zeros(B, 2, device=flux.device, dtype=flux.dtype)
-        
-        # Expand stats to (B, T, 2)
-        stats_expanded = stats.unsqueeze(1).expand(-1, T, -1)
-
-        # Embed tokens: normalized_flux + mean + std -> (B, T, 3) -> (B, T, embed_dim)
-        token_input = torch.cat([flux_norm.unsqueeze(-1), stats_expanded], dim=-1)
-        flux_embedded = self.token_embed(token_input)
+        # Embed flux tokens: normalized_flux -> (B, T, 1) -> (B, T, embed_dim)
+        flux_embedded = self.token_embed(flux_norm.unsqueeze(-1))
 
         # Wavelength-based position encoding: (B, T, embed_dim)
         pos_emb = self._wavelength_positional_encoding(
             wavelengths, self.embed_dim, flux.device
         )
 
-        # Combine embeddings
-        x = flux_embedded + pos_emb
+        # Combine flux embeddings with position encoding
+        flux_tokens = flux_embedded + pos_emb  # (B, T, embed_dim)
+
+        # Create CLS token with stats information
+        # CLS token = learnable embedding + stats embedding
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # (B, 1, embed_dim)
+        stats_emb = self.stats_embed(stats).unsqueeze(1)  # (B, 1, embed_dim)
+        cls_tokens = cls_tokens + stats_emb  # (B, 1, embed_dim)
+
+        # Prepend CLS token to sequence
+        x = torch.cat([cls_tokens, flux_tokens], dim=1)  # (B, T+1, embed_dim)
 
         # Create key_padding_mask for attention: True = mask out (invalid positions)
-        # valid_mask: True = valid, so key_padding_mask = ~valid_mask
-        key_padding_mask = None
-        key_padding_mask = ~valid_mask  # (B, T), True = position to mask in attention
+        # CLS token is always valid (False = not masked)
+        if valid_mask is not None:
+            cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=flux.device)
+            key_padding_mask = torch.cat([cls_mask, ~valid_mask], dim=1)  # (B, T+1)
+        else:
+            key_padding_mask = None
 
         # Apply transformer blocks with attention mask
         for block in self.blocks:
             x = block(x, key_padding_mask=key_padding_mask)
 
         # Final layer norm
-        x = self.final_ln(x)  # (B, T, embed_dim)
+        x = self.final_ln(x)  # (B, T+1, embed_dim)
+        
+        if return_cls_only:
+            return x[:, 0, :]  # (B, embed_dim) - CLS token only
         return x
 
     def forward(
@@ -232,19 +248,23 @@ class MASpecFormer(L.LightningModule):
         
         Returns:
             dict with keys:
-                - reconstructions: shape (B, T), reconstructed flux
-                - embedding: shape (B, T, embed_dim)
+                - reconstructions: shape (B, T), reconstructed normalized flux
+                - cls_embedding: shape (B, embed_dim), global spectrum embedding
+                - token_embeddings: shape (B, T, embed_dim), per-token embeddings
         """
         # Encode flux into embeddings (normalization happens inside encode)
-        x = self.encode(flux, wavelengths, valid_mask)
+        x = self.encode(flux, wavelengths, valid_mask)  # (B, T+1, embed_dim)
         
-        # Reconstruction head
-        reconstructions = self.head(x).squeeze(-1)  # (B, T)
-        #TODO put mean and std back?
-        #mean std is there to put bakc
+        # Split CLS and flux tokens
+        cls_embedding = x[:, 0, :]  # (B, embed_dim)
+        token_embeddings = x[:, 1:, :]  # (B, T, embed_dim)
+        
+        # Reconstruction head: predict normalized flux (only for flux tokens)
+        reconstructions = self.head(token_embeddings).squeeze(-1)  # (B, T)
         return {
             "reconstructions": reconstructions,
-            "embedding": x,
+            "cls_embedding": cls_embedding,
+            "token_embeddings": token_embeddings,
         }
 
     def training_step(self, batch: dict) -> Tensor:
@@ -254,6 +274,7 @@ class MASpecFormer(L.LightningModule):
         - valid_mask: data quality mask (True = valid) → used in attention (invalid positions not attended)
         - train_mask: random mask for reconstruction (True = masked) → only affects input values
         - loss computed only on masked valid positions
+        - Target is NORMALIZED flux (stable training)
         
         Batch dict contains:
             - flux: shape (B, T)
@@ -264,35 +285,39 @@ class MASpecFormer(L.LightningModule):
         wavelength = batch["wavelength"]  # (B, T)
         valid_mask = batch["valid_mask"]  # (B, T) bool
 
-        # Normalize flux per-sample (specformer style)
+        # Normalize flux per-sample
         flux_norm, mean, std = self._normalize_flux(flux, valid_mask)
 
-        # Clone normalized input as target
+        # Target is NORMALIZED flux (for stable training)
         target = flux_norm.clone()
 
         # Apply random mask to input (zero out masked positions among valid ones)
-        # Returns both masked flux and the mask itself
         input_flux, train_mask = self._mask_input(flux_norm, valid_mask)
 
-        stats = torch.cat([mean, std], dim=-1)
+        # Compute stats tensor for encode
+        stats = torch.cat([mean, std], dim=-1)  # (B, 2)
 
         # Forward pass with valid_mask for attention
-        # input_flux is already normalized, so we pass normalize=False and provide stats
-        x = self.encode(input_flux, wavelength, valid_mask, normalize=False)
-        reconstructions = self.head(x).squeeze(-1)
+        # input_flux is already normalized with stats
+        x = self.encode(input_flux, wavelength, valid_mask, stats=stats)
         
-        output = {
-            "reconstructions": reconstructions,
-            "embedding": x,
-        }
-        reconstructions = output["reconstructions"]  # (B, T)
+        # Split CLS and flux tokens
+        cls_embedding = x[:, 0, :]  # (B, embed_dim)
+        token_embeddings = x[:, 1:, :]  # (B, T, embed_dim)
+        
+        # Model predicts normalized flux (only for flux tokens, not CLS)
+        reconstructions = self.head(token_embeddings).squeeze(-1)  # (B, T)
 
         # loss_mask: positions that are both train-masked AND valid
         loss_mask = (train_mask & valid_mask).float()  # (B, T)
 
-        # Compute loss only on masked valid positions (specformer style)
+        # Compute loss only on masked valid positions (in normalized space)
         if loss_mask.sum() > 0:
-            loss = F.mse_loss(reconstructions * loss_mask, target * loss_mask, reduction="mean") / loss_mask.mean().clamp(min=1e-8)
+            loss = F.mse_loss(
+                reconstructions * loss_mask, 
+                target * loss_mask, 
+                reduction="sum"
+            ) / loss_mask.sum().clamp(min=1)
         else:
             loss = torch.tensor(0.0, device=flux.device)
 
@@ -300,9 +325,9 @@ class MASpecFormer(L.LightningModule):
         B, T = flux.shape
         
         # Mask statistics
-        mask_count = train_mask.sum().float()  # Total masked positions in batch
-        valid_count = valid_mask.sum().float()  # Total valid positions in batch
-        mask_ratio_actual = mask_count / valid_count.clamp(min=1)  # Actual mask ratio
+        mask_count = train_mask.sum().float()
+        valid_count = valid_mask.sum().float()
+        mask_ratio_actual = mask_count / valid_count.clamp(min=1)
         
         # Per-sample reconstruction error (for variance analysis)
         with torch.no_grad():
@@ -313,8 +338,8 @@ class MASpecFormer(L.LightningModule):
                 recon_error_std = torch.tensor(0.0, device=flux.device)
         
         # Flux normalization statistics (batch-level)
-        flux_mean_avg = mean.mean()  # Average of per-sample means
-        flux_std_avg = std.mean()    # Average of per-sample stds
+            flux_mean_avg = mean.mean()
+            flux_std_avg = std.mean()
         
         # Learning rate (from optimizer)
         if self.trainer and self.trainer.optimizers:
@@ -335,37 +360,38 @@ class MASpecFormer(L.LightningModule):
         return loss
 
     def validation_step(self, batch: dict) -> Tensor:
-        """Validation step (same masking strategy as training)."""
+        """Validation step (no masking - evaluate full reconstruction)."""
         flux = batch["flux"]
         wavelength = batch["wavelength"]
         valid_mask = batch["valid_mask"]
 
         # Normalize flux per-sample
         flux_norm, mean, std = self._normalize_flux(flux, valid_mask)
-        target = flux_norm.clone()
+        target = flux_norm.clone()  # Target is normalized flux
 
-        # Apply random mask to input
-        input_flux, train_mask = self._mask_input(flux_norm, valid_mask)
+        # NO masking in validation - evaluate on full unmasked spectra
+        input_flux = flux_norm
 
-        stats = torch.cat([mean, std], dim=-1)
+        # Compute stats tensor for encode
+        stats = torch.cat([mean, std], dim=-1)  # (B, 2)
 
-        # Forward pass with valid_mask for attention
-        # input_flux is already normalized, so we pass normalize=False
-        x = self.encode(input_flux, wavelength, valid_mask, normalize=False)
-        reconstructions = self.head(x).squeeze(-1)
+        # Forward pass with unmasked input
+        x = self.encode(input_flux, wavelength, valid_mask, stats=stats)
         
-        output = {
-            "reconstructions": reconstructions,
-            "embedding": x,
-        }
-        reconstructions = output["reconstructions"]
+        # Split CLS and flux tokens, reconstruct only flux tokens
+        token_embeddings = x[:, 1:, :]  # (B, T, embed_dim)
+        reconstructions = self.head(token_embeddings).squeeze(-1)  # (B, T)
 
-        # loss_mask: positions that are both train-masked AND valid
-        loss_mask = (train_mask & valid_mask).float()
+        # loss_mask: only on valid positions (no train mask in validation)
+        loss_mask = valid_mask.float()
 
-        # Compute loss
+        # Compute loss in normalized space
         if loss_mask.sum() > 0:
-            loss = F.mse_loss(reconstructions * loss_mask, target * loss_mask, reduction="mean") / loss_mask.mean().clamp(min=1e-8)
+            loss = F.mse_loss(
+                reconstructions * loss_mask, 
+                target * loss_mask, 
+                reduction="sum"
+            ) / loss_mask.sum().clamp(min=1)
         else:
             loss = torch.tensor(0.0, device=flux.device)
 
@@ -380,29 +406,25 @@ class MASpecFormer(L.LightningModule):
 
         # Normalize flux per-sample
         flux_norm, mean, std = self._normalize_flux(flux, valid_mask)
-        target = flux_norm.clone()
+        target = flux_norm.clone()  # Target is normalized flux
 
         input_flux, train_mask = self._mask_input(flux_norm, valid_mask)
 
-        stats = torch.cat([mean, std], dim=-1)
+        # Compute stats tensor for encode
+        stats = torch.cat([mean, std], dim=-1)  # (B, 2)
 
-        # Forward pass with valid_mask for attention
-        # input_flux is already normalized, so we pass normalize=False
-        x = self.encode(input_flux, wavelength, valid_mask, normalize=False)
-        reconstructions = self.head(x).squeeze(-1)
+        # Forward pass
+        x = self.encode(input_flux, wavelength, valid_mask, stats=stats)
         
-        output = {
-            "reconstructions": reconstructions,
-            "embedding": x,
-        }
-        reconstructions = output["reconstructions"]
+        # Split CLS and flux tokens, reconstruct only flux tokens
+        token_embeddings = x[:, 1:, :]  # (B, T, embed_dim)
+        reconstructions = self.head(token_embeddings).squeeze(-1)  # (B, T)
 
         loss_mask = (train_mask & valid_mask).float()
 
-        if loss_mask.sum() > 0:
-            loss = F.mse_loss(reconstructions * loss_mask, target * loss_mask, reduction="mean") / loss_mask.mean().clamp(min=1e-8)
-        else:
-            loss = torch.tensor(0.0, device=flux.device)
+        # Compute loss weights and weighted loss
+        loss_weights = self._get_loss_weights(flux_norm, valid_mask)
+        loss = self._weighted_loss(reconstructions, target, loss_mask, loss_weights)
 
         self.log("test_loss", loss, prog_bar=True)
         return loss
