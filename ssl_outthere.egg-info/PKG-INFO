@@ -2,7 +2,6 @@ Metadata-Version: 2.4
 Name: ssl_outthere
 Version: 0.0.1
 Summary: Multi modal, SSL representation learning and downstream tasks for JWST NIRISS/NIRCam images and spectra
-Author: Yang Cheng
 Author-email: Yang Cheng <yacheng@mpia.de>
 License-Expression: MIT
 Project-URL: Homepage, https://github.com/2003cy/ssl_outthere
@@ -17,27 +16,31 @@ Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: astropy
 Requires-Dist: datasets
-Requires-Dist: dinov2@ git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069
+Requires-Dist: torch==2.0.0
+Requires-Dist: torchvision>=0.15.0
+Requires-Dist: omegaconf>=2.3.0
+Requires-Dist: torchmetrics>=0.10.3
+Requires-Dist: fvcore
+Requires-Dist: iopath
+Requires-Dist: xformers==0.0.18
+Requires-Dist: submitit
 Requires-Dist: huggingface_hub
 Requires-Dist: jaxtyping
 Requires-Dist: lightning[extra]
 Requires-Dist: plotly
-Requires-Dist: provabgs@ git+https://github.com/changhoonhahn/provabgs.git
+Requires-Dist: provabgs @ git+https://github.com/changhoonhahn/provabgs.git
 Requires-Dist: pycairo
 Requires-Dist: pyro-ppl
 Requires-Dist: python-dotenv
 Requires-Dist: scikit-image
 Requires-Dist: scikit-learn
-Requires-Dist: torchvision==0.15.0
 Requires-Dist: wandb
 Requires-Dist: ipykernel
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: black; extra == "dev"
 Requires-Dist: isort; extra == "dev"
-Dynamic: author
 Dynamic: license-file
-Dynamic: requires-python
 
 # Multi-Modal SSL Outthere
 
@@ -64,3 +67,8 @@ Currently we plan to build self-supervised models using existing training strate
 1. A GPT-2 based 1D transformer model trained with a masked-modeling objective ([link](https://github.com/PolymathicAI/AstroCLIP/blob/main/astroclip/models/specformer.py)).
 
 2. Current plan is to also test out an approach to train a model which takes 2D spectrograms as input, i.e. a modified ViT/ResNet model for morphology extraction from NIRISS spectra.
+
+
+# TODO
+
+make new single unified dataset for Outthere

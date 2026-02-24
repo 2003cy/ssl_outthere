@@ -1,6 +1,19 @@
+--index-url https://download.pytorch.org/whl/cu117
+--extra-index-url https://pypi.org/simple
+--extra-index-url https://pypi.nvidia.com
+
 astropy
 datasets
-dinov2 @ git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069
+torch==2.0.0
+torchvision>=0.15.0
+omegaconf>=2.3.0
+torchmetrics>=0.10.3
+fvcore
+iopath
+xformers==0.0.18
+submitit
+# dinov2 is OPTIONAL - install separately only if needed:
+# (GPU) pip install --extra-index-url https://pypi.nvidia.com --no-deps git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069
 huggingface_hub
 jaxtyping
 lightning[extra]
@@ -11,5 +24,5 @@ pyro-ppl
 python-dotenv
 scikit-image
 scikit-learn
-torchvision==0.15.0
 wandb
+ipykernel

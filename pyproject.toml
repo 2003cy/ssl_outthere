@@ -2,7 +2,6 @@
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-
 [project]
 name = "ssl_outthere"
 version = "0.0.1"
@@ -12,27 +11,33 @@ requires-python = ">=3.8"
 authors = [ { name = "Yang Cheng", email = "yacheng@mpia.de" } ]
 license = "MIT"
 dependencies = [
-	"astropy",
-	"datasets",
-	"dinov2 @ git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069",
-	"huggingface_hub",
-	"jaxtyping",
-	"lightning[extra]",
-	"plotly",
-	"provabgs @ git+https://github.com/changhoonhahn/provabgs.git",
-	"pycairo",
-	"pyro-ppl",
-	"python-dotenv",
-	"scikit-image",
-	"scikit-learn",
-	"torchvision==0.15.0",
-	"wandb",
+    "astropy",
+    "datasets",
+    "torch==2.0.0",
+    "torchvision>=0.15.0",
+    "omegaconf>=2.3.0",
+    "torchmetrics>=0.10.3",
+    "fvcore",
+    "iopath",
+    "xformers==0.0.18",
+    "submitit",
+    "huggingface_hub",
+    "jaxtyping",
+    "lightning[extra]",
+    "plotly",
+    "provabgs @ git+https://github.com/changhoonhahn/provabgs.git",
+    "pycairo",
+    "pyro-ppl",
+    "python-dotenv",
+    "scikit-image",
+    "scikit-learn",
+    "wandb",
     "ipykernel"
 ]
 classifiers = [
-	"Programming Language :: Python :: 3",
-	"Programming Language :: Python :: 3.8",
-	"Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Operating System :: OS Independent",
 ]
 
 urls = { "Homepage" = "https://github.com/2003cy/ssl_outthere", "Repository" = "https://github.com/2003cy/ssl_outthere", "Bug Tracker" = "https://github.com/2003cy/ssl_outthere/issues" }
@@ -50,4 +55,3 @@ exclude = ["images", "outputs", "notebooks", "data"]
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "isort"]
-
