@@ -12,8 +12,6 @@ fvcore
 iopath
 xformers==0.0.18
 submitit
-# dinov2 is OPTIONAL - install separately only if needed:
-# (GPU) pip install --extra-index-url https://pypi.nvidia.com --no-deps git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069
 huggingface_hub
 jaxtyping
 lightning[extra]
