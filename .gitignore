@@ -30,3 +30,8 @@ images/galaxy_zoo
 
 
 
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+.venv/*
