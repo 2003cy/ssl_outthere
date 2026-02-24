@@ -35,3 +35,4 @@ images/galaxy_zoo
 !.pixi/config.toml
 
 .venv/*
+*.csv
