@@ -185,10 +185,19 @@ class TransformerBlock(nn.Module):
 
 
 def _init_by_depth(m: nn.Module, depth_frac: float) -> None:
-    """Initialize module by depth fraction."""
-    std = 1 / math.sqrt(2 * depth_frac)
-    for param in m.parameters():
-        if param.dim() > 1:
-            nn.init.normal_(param, mean=0, std=std)
-        else:
-            nn.init.constant_(param, 0)
+    """Initialize Linear module weights by depth fraction.
+
+    Follows GPT-2 style: std ∝ 1/sqrt(num_layers), so deeper models get
+    smaller initialization to prevent gradient blow-up at init.
+    depth_frac = 1/num_layers  →  std = sqrt(depth_frac/2) = 1/sqrt(2*num_layers)
+
+    Only applies to nn.Linear modules.  Skipping LayerNorm and other modules
+    is intentional: zeroing LayerNorm gamma (a 1-D weight) would make every
+    transformer block collapse to an identity at init.
+    """
+    if not isinstance(m, nn.Linear):
+        return
+    std = math.sqrt(depth_frac / 2)
+    nn.init.normal_(m.weight, mean=0, std=std)
+    if m.bias is not None:
+        nn.init.constant_(m.bias, 0)

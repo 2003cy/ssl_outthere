@@ -20,23 +20,43 @@ class RunManager(L.Callback):
         self.config_path = Path(config_path) if config_path else None
         self.run_dir: Optional[Path] = None
 
+    @staticmethod
+    def _detect_config_from_argv() -> Optional[Path]:
+        """Find the --config <file> argument from sys.argv (LightningCLI convention)."""
+        import sys
+        args = sys.argv
+        for i, arg in enumerate(args):
+            if arg in ("--config", "-c") and i + 1 < len(args):
+                return Path(args[i + 1])
+            if arg.startswith("--config="):
+                return Path(arg.split("=", 1)[1])
+        # Fallback: any positional .yaml argument
+        for arg in args:
+            if arg.endswith(".yaml") and Path(arg).exists():
+                return Path(arg)
+        return None
+
     def setup(self, trainer: L.Trainer, pl_module: L.LightningModule, stage: str) -> None:
         if stage != "fit" or self.run_dir is not None:
             return
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_dir = self.base_dir / f"{self.run_name}_{timestamp}"
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Copy config if specified
-        if self.config_path and self.config_path.exists():
-            shutil.copy(self.config_path, self.run_dir / "config.yaml")
-        
-        # Conxfigure ModelCheckpoint to save in run_dir
+
+        # Copy config: prefer explicit path, fall back to auto-detection from argv
+        config_to_copy = self.config_path
+        if config_to_copy is None or not config_to_copy.exists():
+            config_to_copy = self._detect_config_from_argv()
+        if config_to_copy and config_to_copy.exists():
+            shutil.copy(config_to_copy, self.run_dir / "config.yaml")
+            print(f"Config saved: {self.run_dir / 'config.yaml'}")
+
+        # Configure ModelCheckpoint to save in run_dir
         for cb in trainer.callbacks:
             if isinstance(cb, L.pytorch.callbacks.ModelCheckpoint):
                 cb.dirpath = str(self.run_dir)
-        
+
         print(f"Run directory: {self.run_dir}")
 
 
