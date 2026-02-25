@@ -36,3 +36,4 @@ images/galaxy_zoo
 
 .venv/*
 *.csv
+settings.json
