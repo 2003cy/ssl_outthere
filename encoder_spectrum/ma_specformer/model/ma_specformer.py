@@ -28,12 +28,10 @@ class MASpecFormer(L.LightningModule):
         num_layers: int = 6,
         num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        max_len: int = 2048,  # Max sequence length (per-spectrum)
         mask_ratio: float = 0.15,  # Fraction of tokens to randomly mask for reconstruction
         min_unmasked: int = 1,  # Minimum unmasked tokens (to preserve some context)
         dropout: float = 0.1,
         bias: bool = True,
-        normalize: bool = True,  # Whether to normalize flux by default
         min_std: float = 0.1,  # Minimum std for normalization (avoid div by zero and unstable gradients)
         block_size: int = 1,  # Contiguous block masking width (1 = random pixel masking)
         cls_aux_weight: float = 0.1,  # Weight for CLS auxiliary loss (0 = disabled)
@@ -44,12 +42,10 @@ class MASpecFormer(L.LightningModule):
             num_layers: Number of transformer blocks
             num_heads: Number of attention heads
             mlp_ratio: Hidden layer ratio in MLP
-            max_len: Maximum sequence length
             mask_ratio: Fraction of tokens to mask for self-supervised training
             min_unmasked: Minimum number of unmasked tokens per sample
             dropout: Dropout rate
             bias: Whether to use bias in linear layers
-            normalize: Whether to normalize flux by default in encode()
             min_std: Minimum std for normalization to avoid division by small numbers
         """
         super().__init__()
@@ -96,7 +92,6 @@ class MASpecFormer(L.LightningModule):
         #
         # At each position p, the decode input is:
         #   cls_embedding (B, D)  +  pos_emb[p] (D)
-        # = "global spectrum context" + "where am I on the wavelength axis"
         #
         # Loss is computed on ALL valid positions (not just masked ones), which
         # forces CLS to encode the complete spectral shape rather than just a
@@ -197,6 +192,7 @@ class MASpecFormer(L.LightningModule):
         valid_mask: Optional[Tensor] = None,
         stats: Optional[Tensor] = None,  # (B, 2) with [mean, std] if provided
         return_cls_only: bool = False,
+        _pos_emb: Optional[Tensor] = None,  # Pre-computed pos encoding; computed internally if None
     ) -> Tensor:
         """Encode flux and wavelengths into embeddings.
         
@@ -227,9 +223,12 @@ class MASpecFormer(L.LightningModule):
         flux_embedded = self.token_embed(flux_norm.unsqueeze(-1))
 
         # Wavelength-based position encoding: (B, T, embed_dim)
-        pos_emb = self._wavelength_positional_encoding(
-            wavelengths, self.embed_dim, flux.device
-        )
+        # Use pre-computed pos_emb if provided (avoids redundant computation in forward())
+        if _pos_emb is None:
+            _pos_emb = self._wavelength_positional_encoding(
+                wavelengths, self.embed_dim, flux.device
+            )
+        pos_emb = _pos_emb
 
         # Combine flux embeddings with position encoding
         flux_tokens = flux_embedded + pos_emb  # (B, T, embed_dim)
@@ -259,7 +258,7 @@ class MASpecFormer(L.LightningModule):
 
         # Final layer norm
         x = self.final_ln(x)  # (B, T+1, embed_dim)
-        
+
         if return_cls_only:
             return x[:, 0, :]  # (B, embed_dim) - CLS token only
         return x
@@ -285,7 +284,10 @@ class MASpecFormer(L.LightningModule):
             cls_embedding    (B, D)       global spectrum embedding (CLS token)
             token_embeddings (B, T, D)    per-token transformer outputs
         """
-        x = self.encode(flux, wavelengths, valid_mask, stats=stats)  # (B, T+1, D)
+        # Compute pos_emb once here so both encode() and cls_recon_head can use it
+        pos_emb = self._wavelength_positional_encoding(wavelengths, self.embed_dim, flux.device)
+
+        x = self.encode(flux, wavelengths, valid_mask, stats=stats, _pos_emb=pos_emb)  # (B, T+1, D)
 
         cls_embedding    = x[:, 0, :]   # (B, D)
         token_embeddings = x[:, 1:, :]  # (B, T, D)
@@ -294,7 +296,6 @@ class MASpecFormer(L.LightningModule):
         reconstructions = self.head(token_embeddings).squeeze(-1)  # (B, T)
 
         # CLS global reconstruction: CLS + pos_emb → flux at each wavelength
-        pos_emb    = self._wavelength_positional_encoding(wavelengths, self.embed_dim, flux.device)
         cls_decode = cls_embedding.unsqueeze(1) + pos_emb          # (B, T, D)
         cls_recons = self.cls_recon_head(cls_decode).squeeze(-1)   # (B, T)
 
@@ -419,21 +420,35 @@ class MASpecFormer(L.LightningModule):
 
         out = self.forward(input_flux, wavelength, valid_mask, stats=stats)
         reconstructions = out["reconstructions"]  # (B, T)
+        cls_recons      = out["cls_recons"]        # (B, T)
 
-        # loss_mask: only on valid positions (no train mask in validation)
-        loss_mask = valid_mask.float()
+        valid_float = valid_mask.float()
+        count = valid_float.sum().clamp(min=1)
 
-        # Compute loss in normalized space
-        if loss_mask.sum() > 0:
-            loss = F.mse_loss(
-                reconstructions * loss_mask, 
-                target * loss_mask, 
-                reduction="sum"
-            ) / loss_mask.sum().clamp(min=1)
+        # Token reconstruction loss (all valid positions, no masking in validation)
+        if valid_float.sum() > 0:
+            recon_loss = F.mse_loss(
+                reconstructions * valid_float,
+                target * valid_float,
+                reduction="sum",
+            ) / count
         else:
-            loss = torch.tensor(0.0, device=flux.device)
+            recon_loss = torch.tensor(0.0, device=flux.device)
 
-        self.log("val_loss", loss, prog_bar=True, on_step=True)
+        # CLS reconstruction loss
+        cls_loss = torch.tensor(0.0, device=flux.device)
+        if self.hparams.cls_aux_weight > 0 and valid_float.sum() > 0:
+            cls_loss = F.mse_loss(
+                cls_recons * valid_float,
+                target * valid_float,
+                reduction="sum",
+            ) / count
+
+        loss = recon_loss + self.hparams.cls_aux_weight * cls_loss
+
+        self.log("val_loss",       loss,       prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log("val_recon_loss", recon_loss, on_epoch=True, sync_dist=True)
+        self.log("val_cls_loss",   cls_loss,   on_epoch=True, sync_dist=True)
         return loss
 
     def test_step(self, batch: dict) -> Tensor:
@@ -555,9 +570,14 @@ class MASpecFormer(L.LightningModule):
                 # covered.  Each block covers at most block_size valid pixels.
                 num_blocks = max(1, int(num_valid * mask_ratio / block_size))
 
-                # Sample block start positions from valid pixel indices
-                perm         = torch.randperm(num_valid, device=flux.device)
-                start_picks  = valid_indices[perm[:num_blocks]]   # (num_blocks,)
+                # Sample block start positions from valid pixel indices that
+                # can fit a full block (at least block_size pixels remain to
+                # the right), so blocks don't get silently truncated at edges.
+                eligible = valid_indices[valid_indices <= T - block_size]
+                if len(eligible) == 0:
+                    eligible = valid_indices  # fallback: all valid indices
+                perm        = torch.randperm(len(eligible), device=flux.device)
+                start_picks = eligible[perm[:num_blocks]]   # (num_blocks,)
 
                 for start in start_picks.tolist():
                     # mask pixels in [start, start+block_size), only if valid

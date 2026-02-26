@@ -1,5 +1,5 @@
 #python data/trainer_jda.py fit --config ma_specformer_jda_low_res.yaml 
-seed_everything: 57
+seed_everything: 1
 
 # Model settings (tuned for JDA PRISM/F100LP spectra, ~56 pixels in 1-2 µm)
 model:
@@ -7,11 +7,10 @@ model:
   num_layers: 8    
   num_heads: 8
   mlp_ratio: 4.0
-  max_len: 100       # 64 → 2048: accommodates the 1666-pixel F100LP/G140M group (next power-of-2 ceiling)
-  mask_ratio: 0.30    # 0.50: 28/56 tokens masked; symmetric context
+  mask_ratio: 0.40    # 40% of valid tokens masked per sample
   min_unmasked: 10    # keeps at least 10 tokens visible
-  block_size: 6       # mask contiguous blocks of 4 pixels (~720 Å at PRISM R~100)
-  cls_aux_weight: 1  # auxiliary loss on CLS token; encourages global context learning
+  block_size: 2       # mask contiguous blocks of 2 pixels (~360 Å at PRISM R~100)
+  cls_aux_weight: 0.8  # auxiliary loss on CLS token; encourages global context learning
   dropout: 0.1
   bias: true
 
@@ -19,10 +18,10 @@ model:
 optimizer:
   class_path: torch.optim.adamw.AdamW
   init_args:
-    lr: 1.0e-4
+    lr: 2.0e-4      # overridden every step by WarmupCosineLR; set to base_lr for clarity
     weight_decay: 0.01
     betas: [0.9, 0.95]
-    
+
 lr_scheduler: null  # Custom WarmupCosineLR callback below
 
 # Data settings
@@ -32,9 +31,9 @@ data:
   num_workers: 4
   train_val_split: 0.9
   use_infinite_sampler: true
-  min_sn50: 2.0          # mild quality cut; removes the very noisiest spectra
-  min_length: 0        # strict lower bound: keeps length > 100 (excludes 56-pixel PRISM group)
-  max_length: 100       # upper bound: keeps length <= 1999 (excludes 3971-pixel group)
+  min_sn50: 3
+  min_length: 0        # no lower bound; all spectra with length >= 0 are included
+  max_length: 100       # keeps only PRISM/F100LP spectra (~56 pixels); excludes longer grisms
 
 # Trainer settings
 trainer:
@@ -73,5 +72,5 @@ trainer:
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_loss
-        patience: 10
+        patience: 20
         mode: min
