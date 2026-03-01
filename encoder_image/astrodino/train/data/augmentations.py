@@ -5,7 +5,7 @@
 
 import logging
 from typing import List
-
+from astropy.stats import mad_std
 import numpy as np
 import skimage.filters
 import skimage.transform
@@ -48,33 +48,33 @@ class DataAugmentationAstroDINO(object):
         logger.info(f"center_crop_size: {center_crop_size}")
         logger.info("###################################")
 
-        # random resized crop and flip
-        geo_global = []
-        geo_local = []
-        if self.center_crop_size is not None and self.center_crop_size > 0:
-            geo_global.append(transforms.CenterCrop(self.center_crop_size))
-            geo_local.append(transforms.CenterCrop(self.center_crop_size))
-
-        geo_global.extend(
-            [
-                transforms.RandomCrop(global_crops_size),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomVerticalFlip(p=0.5),
-                #transforms.RandomRotation(degrees=(-15, 15), fill=0),
-            ]
+        # Rotation before CenterCrop so fill artifacts are removed by the crop.
+        # p=0.2 is sufficient given HFlip+VFlip already cover 4 discrete orientations.
+        rotation = transforms.RandomApply(
+            [transforms.RandomRotation(degrees=45, fill=0)], p=0.5
         )
 
-        geo_local.extend(
-            [
-                transforms.RandomCrop(local_crops_size),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomVerticalFlip(p=0.5),
-                #transforms.RandomRotation(degrees=(-15, 15), fill=0),
-            ]
+        center_crop = (
+            [transforms.CenterCrop(self.center_crop_size)]
+            if self.center_crop_size is not None and self.center_crop_size > 0
+            else []
         )
 
-        self.geometric_augmentation_global = transforms.Compose(geo_global)
-        self.geometric_augmentation_local = transforms.Compose(geo_local)
+        self.geometric_augmentation_global = transforms.Compose([
+            rotation,
+            *center_crop,
+            transforms.RandomCrop(global_crops_size),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomVerticalFlip(p=0.5),
+        ])
+
+        self.geometric_augmentation_local = transforms.Compose([
+            rotation,
+            *center_crop,
+            transforms.RandomCrop(local_crops_size),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomVerticalFlip(p=0.5),
+        ])
 
         global_transfo1_extra = transforms.Compose(
             [
@@ -206,8 +206,11 @@ class ToRGB:
 
 class ToRGB:
     """
-    Stretch a single-band cutout and broadcast it to RGB by cloning the channel
-    after applying a simple arcsinh stretch (mirrors ToRGB logic but mono-band).
+    Apply arcsinh stretch to a single-band cutout and return a single-channel array.
+    Input: (1,H,W) or (H,W) numpy array of raw flux values.
+    Output: (H,W,1) when return_channel_pos=2 (default for training pipeline),
+            (1,H,W) when return_channel_pos=0.
+    DataAugmentationAstroDINO.__call__ converts (H,W,1) → (1,H,W) via permute(2,0,1).
     """
 
     def __init__(self, scale: float = 1.0, m: float = 0.03, Q: float = 20.0, return_channel_pos: int = 0):
@@ -233,131 +236,81 @@ class ToRGB:
         fI = np.arcsinh(self.Q * I) / np.sqrt(self.Q + 1e-8)
         stretched = np.clip(base * fI / I, 0.0, 1.0).astype(np.float32)
 
-        # Repeat into three identical channels; DataAugmentation converts to CHW later.
-        rgb = np.stack((stretched, stretched, stretched), axis=-1)
+        # Single channel; DataAugmentation's .permute(2,0,1) converts (H,W,1) -> (1,H,W).
+        rgb = stretched[:, :, np.newaxis]
         if return_channel_pos == 0:
-            rgb = np.transpose(rgb, (2, 0, 1))  # C x H x W
-            return rgb
+            return rgb.transpose(2, 0, 1)  # (1, H, W)
         elif return_channel_pos == 2:
-            return rgb
+            return rgb                      # (H, W, 1)
 
+#TODO: could add random blank crops from mosaic as noise
 class GaussianNoise:
     """
-    Augmentations tuned to the Legacy Survey Data (with minor modifications).
+    Adds Gaussian noise in quadrature to channel 0 to simulate shallower observations.
 
-    Code copied from
-    https://github.com/georgestein/ssl-legacysurvey/blob/main/ssl_legacysurvey/data_loaders/decals_augmentations.py#L296
+    sigma_sky is a fixed reference background noise level measured from JWST
+    COSMOS-Web f150w mosaics (~0.021 MJy/sr; tile-to-tile variation ~3%, treated
+    as constant). sigma_final is drawn uniformly from [0, k_max * sigma_sky];
+    noise is added in quadrature only when sigma_final > sigma_sky (~50% of calls).
+    k_max = 2 covers up to 4x noise variance (2x sigma).
+
+    Only channel 0 is modified; channels 1 and 2 are identical copies that are
+    discarded by ToRGB anyway.
     """
 
     def __init__(
         self,
-        scaling: List = [1.0],
         mean: float = 0,
         im_dim: int = 144,
-        im_ch: int = 3,
-        decals: bool = True,
-        uniform: bool = False,
+        sigma_sky: float = 2.1e-02,   # MJy/sr; JWST COSMOS-Web f150w median
+        k_max: float = 2.0,           # sigma_final in [0, k_max * sigma_sky]
     ):
         self.mean = mean
-        self.decals = decals
-        self.im_ch = im_ch
         self.im_dim = im_dim
-        self.uniform = uniform
-
-        # Log normal fit paramaters
-        self.shape_dist = np.array([0.2264926, 0.2431146, 0.1334844])
-        self.loc_dist = np.array([-0.0006735, -0.0023663, -0.0143416])
-        self.scale_dist = np.array([0.0037602, 0.0067417, 0.0260779])
-
-        self.sigma_dist = np.log(self.scale_dist)
-
-        # noise in channels is uncorrelated, as images taken at dirrerent times/telescopes
-        self.noise_ch_min = np.array([0.001094, 0.001094, 0.001094])
-        self.noise_ch_max = np.array([0.013, 0.018, 0.061])
+        self.sigma_sky = sigma_sky
+        self.k_max = k_max
 
     def __call__(self, image: np.ndarray):
-        # draw 'true' noise level of each channel from lognormal fits
-        self.sigma_true = (
-            np.random.lognormal(self.sigma_dist, self.shape_dist) + self.loc_dist
+        sigma_final = np.random.uniform(0.0, self.k_max * self.sigma_sky)
+        sigma_augment_sq = sigma_final**2 - self.sigma_sky**2
+        if sigma_augment_sq <= 0.0:
+            return image
+        sigma_augment = np.sqrt(sigma_augment_sq)
+        image[0, :, :] += np.random.normal(
+            self.mean, sigma_augment, size=(self.im_dim, self.im_dim)
         )
-
-        if self.uniform:
-            # draw desired augmented noise level from uniform, to target tails more
-            self.sigma_final = np.random.uniform(self.noise_ch_min, self.noise_ch_max)
-        else:
-            self.sigma_final = (
-                np.random.lognormal(self.sigma_dist, self.shape_dist) + self.loc_dist
-            )
-
-        # Gaussian noise adds as c^2 = a^2 + b^2
-        self.sigma_augment = self.sigma_final**2 - self.sigma_true**2
-        self.sigma_augment[self.sigma_augment < 0.0] = 0.0
-        self.sigma_augment = np.sqrt(self.sigma_augment)
-
-        for i in range(self.im_ch):
-            if self.sigma_augment[i] > 0.0:
-                image[i, :, :] += np.random.normal(
-                    self.mean, self.sigma_augment[i], size=(self.im_dim, self.im_dim)
-                )
-
         return image
 
 
 class GaussianBlur:
     """
-    Augmentations tuned to the Legacy Survey Data (with minor modifications).
+    Applies additional Gaussian blur to channel 0 to simulate a slightly degraded PSF.
 
-    Code copied from
-    https://github.com/georgestein/ssl-legacysurvey/blob/main/ssl_legacysurvey/data_loaders/decals_augmentations.py#L296
+    JWST f150w PSF FWHM ≈ 60 mas = 2 px at 30 mas/pix → sigma_psf ≈ 0.85 px.
+    sigma_final is drawn uniformly from [0, k_max * sigma_psf]; extra blur is
+    applied only when sigma_final > sigma_psf (quadrature: c² = b² - a²).
+    k_max = 1.5 → FWHM range [60, 90] mas, conservative PSF augmentation.
+    ~33% of calls add no blur (sigma_final < sigma_psf).
+
+    Only channel 0 is modified; channels 1 and 2 are identical copies that are
+    discarded by ToRGB anyway.
     """
 
     def __init__(
         self,
-        scaling: List = [1.0],
-        im_dim: int = 144,
-        im_ch: int = 3,
-        decals: bool = True,
-        uniform: bool = False,
+        sigma_psf: float = 0.85,   # pixels; JWST f150w at 30 mas/pix
+        k_max: float = 1.5,        # sigma_final in [0, k_max * sigma_psf]
     ):
-        self.decals = decals
-        self.im_ch = im_ch
-        self.im_dim = im_dim
-        self.uniform = uniform
-
-        # Log normal fit paramaters
-        self.shape_dist = np.array([0.2109966, 0.3008485, 0.3471172])
-        self.loc_dist = np.array([1.0807153, 1.2394326, 1.1928363])
-        self.scale_dist = np.array([1.3153171, 0.9164757, 0.8233702])
-
-        self.sigma_dist = np.log(self.scale_dist)
-
-        self.psf_ch_min = np.array([1.3233109, 1.2667341, 1.2126263])
-        self.psf_ch_max = np.array([5.0, 4.5, 4.25])
+        self.sigma_psf = sigma_psf
+        self.k_max = k_max
 
     def __call__(self, image: np.ndarray):
-        # noise in channels is uncorrelated, as images taken at different times/telescopes
-        # draw 'true' noise level of each channel from lognormal fits
-        self.sigma_true = (
-            np.random.lognormal(self.sigma_dist, self.shape_dist) + self.loc_dist
+        sigma_final = np.random.uniform(0.0, self.k_max * self.sigma_psf)
+        sigma_augment_sq = sigma_final**2 - self.sigma_psf**2
+        if sigma_augment_sq <= 0.0:
+            return image
+        sigma_augment = np.sqrt(sigma_augment_sq)
+        image[0, :, :] = skimage.filters.gaussian(
+            image[0, :, :], sigma=sigma_augment, mode="reflect"
         )
-
-        if self.uniform:
-            # draw desired augmented noise level from uniform, to target tails more
-            self.sigma_final = np.random.uniform(self.psf_ch_min, self.psf_ch_max)
-        else:
-            self.sigma_final = (
-                np.random.lognormal(self.sigma_dist, self.shape_dist) + self.loc_dist
-            )
-
-        # Gaussian noise adds as c^2 = a^2 + b^2
-        self.sigma_augment = self.sigma_final**2 - self.sigma_true**2
-        self.sigma_augment[self.sigma_augment < 0.0] = 0.0
-        self.sigma_augment = np.sqrt(self.sigma_augment)
-
-        for i in range(self.im_ch):
-            if self.sigma_augment[i] > 0.0:
-                image[i, :, :] = skimage.filters.gaussian(
-                    image[i, :, :], sigma=self.sigma_augment[i], mode="reflect"
-                )
-
         return image

@@ -82,9 +82,12 @@ train:
   cache_dataset: true
   centering: "centering"               # optional: try sinkhorn_knopp for first 5-10 epochs if code supports
   channel: 2
+  re_min_pix: null                     # min Sérsic effective radius in pixels (null = no cut)
+  re_max_pix: null                     # max Sérsic effective radius in pixels (null = no cut)
 
 student:
   arch: vit_large
+  in_chans: 1                           # single-channel JWST input
   patch_size: 10
   drop_path_rate: 0.3
   layerscale: 1.0e-05

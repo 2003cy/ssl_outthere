@@ -82,11 +82,16 @@ train:
   cache_dataset: true
   centering: "centering"               # optional: try sinkhorn_knopp for first 5-10 epochs if code supports
   channel: 2
+  re_min_pix: 2.3                     # min Sérsic effective radius in pixels (null = no cut)
+  re_max_pix: null                     # max Sérsic effective radius in pixels (null = no cut)
 
 student:
   arch: vit_base
-  patch_size: 8
-  drop_path_rate: 0.3
+  in_chans: 1                           # single-channel JWST input
+  patch_size: 4
+  embed_dim: 512
+  num_heads: 8
+  drop_path_rate: 0.2
   layerscale: 1.0e-05
   drop_path_uniform: true
   pretrained_weights: ''
@@ -95,7 +100,7 @@ student:
   qkv_bias: true
   proj_bias: true
   ffn_bias: true
-  num_register_tokens: 7   # Fix xFormers alignment: makes seq_len divisible by 8
+  num_register_tokens: 7
 
 # Teacher schedule
 teacher:
@@ -103,10 +108,10 @@ teacher:
   final_momentum_teacher: 1
   warmup_teacher_temp: 0.04              
   teacher_temp: 0.07                     
-  warmup_teacher_temp_epochs: 10         # warmup in epochs (10k steps with OFFICIAL_EPOCH_LENGTH=1000)
+  warmup_teacher_temp_epochs: 20         # warmup in epochs (10k steps with OFFICIAL_EPOCH_LENGTH=1000)
 
 optim:
-  epochs: 150                            # total steps = 60k (≈ 17.3M image exposures with 288/img per step)
+  epochs: 200                            # total steps = 60k (≈ 17.3M image exposures with 288/img per step)
   weight_decay: 0.004
   weight_decay_end: 0.04
   base_lr: 6e-5                        # defined for global batch = 1024
@@ -123,7 +128,7 @@ optim:
 
 crops:
   local_crops_number: 8
-  global_crops_size: 64   # Changed from 72 to ensure (64/8)^2+1+7=72 tokens (divisible by 8)
+  global_crops_size: 64   
   local_crops_size: 32    # (32/8)^2+1+7=24 tokens (divisible by 8)
   center_crop_size: 100
 

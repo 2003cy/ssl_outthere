@@ -20,8 +20,8 @@ module load cuda/12.6
 #run_name="astrodino_f150w_vitb_dev"
 #config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vitb_f150w.yaml"
 
-run_name="astrodino_f150w_vits_dev"
-config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vits_f150w.yaml"
+run_name="astrodino_f150w_vitb_ps6_bs128_dev"
+config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_f150w_vitb_ps6_bs128.yaml"
 
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK

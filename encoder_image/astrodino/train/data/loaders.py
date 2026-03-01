@@ -8,7 +8,7 @@ import torch
 from dinov2.data.samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
 from torch.utils.data import Sampler
 
-from .dataset import LegacySurvey, LegacySurveyNorth, JWST
+from .dataset import JWST
 
 logger = logging.getLogger("dinov2")
 
@@ -25,30 +25,19 @@ def _parse_dataset_str(dataset_str: str):
     tokens = dataset_str.split(":")
 
     name = tokens[0]
+    if name != "jwst":
+        raise ValueError(f'Unsupported dataset "{name}". Only "jwst" is supported.')
+
     kwargs = {}
-
+    _JWST_KEYS = {"root", "split", "filter", "extra_returns"}
     for token in tokens[1:]:
-        key, value = token.split("=")
-        assert key in ("root", "extra", "split", "filter","extra_returns")
+        key, value = token.split("=", 1)  # maxsplit=1 keeps values that contain "="
+        if key not in _JWST_KEYS:
+            raise ValueError(f'Unknown dataset key "{key}". Valid keys: {_JWST_KEYS}')
         kwargs[key] = value
-    print(kwargs)
 
-    if name == "LegacySurvey":
-        class_ = LegacySurvey
-        if "split" in kwargs:
-            kwargs["split"] = kwargs["split"]
-    elif name == "LegacySurveyNorth":
-        class_ = LegacySurveyNorth
-        if "split" in kwargs:
-            kwargs["split"] = kwargs["split"]
-    elif name == 'jwst':
-        class_ = JWST
-        if 'split' in kwargs:
-            kwargs['split'] = kwargs['split']
-    else:
-        raise ValueError(f'Unsupported dataset "{name}"')
-
-    return class_, kwargs
+    logger.info("Parsed dataset 'jwst' with kwargs: %s", kwargs)
+    return JWST, kwargs
 
 
 def make_dataset(
@@ -56,37 +45,34 @@ def make_dataset(
     dataset_str: str,
     transform: Optional[Callable] = None,
     target_transform: Optional[Callable] = None,
-    channel: int = 2,
-    return_flux: bool = False,
-    ):
+    re_min_pix: Optional[float] = None,
+    re_max_pix: Optional[float] = None,
+    **_ignored,
+) -> JWST:
     """
-    Creates a dataset with the specified parameters.
+    Create a JWST dataset from a dataset string.
 
     Args:
-        dataset_str: A dataset string description (e.g. ImageNet:split=TRAIN).
-        transform: A transform to apply to images.
-        target_transform: A transform to apply to targets.
-        channel: The channel of the images to use.
-        return_flux: Whether to return fluxes along with images.
-        filter: The filter to use for JWST dataset (default: 'f115w').
+        dataset_str:      Colon-separated key=value string, e.g.
+                          "jwst:split=train:root=/path/to/data:filter=f150w"
+        transform:        Image transform passed to the dataset.
+        target_transform: Target transform passed to the dataset.
+        re_min_pix:       Min Sérsic effective radius in pixels (from cfg.train).
+        re_max_pix:       Max Sérsic effective radius in pixels (from cfg.train).
+        **_ignored:       Extra kwargs (e.g. `channel`) accepted for call-site compatibility.
     Returns:
-        The created dataset.
+        Constructed JWST dataset.
     """
-    logger.info(f'using dataset: "{dataset_str}"')
-
-    class_, kwargs = _parse_dataset_str(dataset_str)
-    if class_ == JWST:
-        dataset = class_(transform=transform, target_transform=target_transform, **kwargs)
-    else:
-        dataset = class_(transform=transform, target_transform=target_transform, channel=channel, return_flux=return_flux, **kwargs)
-    logger.info(f"# of dataset samples: {len(dataset):,d}")
-
-    # Aggregated datasets do not expose (yet) these attributes, so add them.
-    if not hasattr(dataset, "transform"):
-        setattr(dataset, "transform", transform)
-    if not hasattr(dataset, "target_transform"):
-        setattr(dataset, "target_transform", target_transform)
-
+    logger.info('Building dataset: "%s"', dataset_str)
+    _, kwargs = _parse_dataset_str(dataset_str)
+    dataset = JWST(
+        transform=transform,
+        target_transform=target_transform,
+        re_min_pix=re_min_pix,
+        re_max_pix=re_max_pix,
+        **kwargs,
+    )
+    logger.info("Dataset size: %d samples", len(dataset))
     return dataset
 
 

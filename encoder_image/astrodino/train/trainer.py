@@ -224,11 +224,11 @@ def do_train(cfg, model, run_name, group_name, resume=False):
 
     # setup data loader
     dataset = make_dataset(
-        #filer info if using jwst should be embedded in the dataset path
-        dataset_str=cfg.train.dataset_path, #was format_with_env(cfg.train.dataset_path),
+        dataset_str=cfg.train.dataset_path,
         transform=data_transform,
         target_transform=lambda _: (),
-        channel=int(cfg.train.channel),
+        re_min_pix=cfg.train.get("re_min_pix", None),
+        re_max_pix=cfg.train.get("re_max_pix", None),
     )
     # sampler_type = SamplerType.INFINITE
     sampler_type = SamplerType.SHARDED_INFINITE

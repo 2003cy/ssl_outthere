@@ -1,7 +1,6 @@
 #!/bin/bash -l
-#SBATCH -t 08:04:00
+#SBATCH -t 21:00:00
 #SBATCH --nodes=1
-#SBATCH --constraint="gpudev"   #   providing GPUs.
 #SBATCH --gres=gpu:a100:4    # Request 4 GPUs per node.
 #SBATCH --tasks-per-node=4  #   running 4 tasks per node, each with 1 GPU.
 #SBATCH --cpus-per-task=18   #   using 18 cores each.
@@ -19,8 +18,8 @@ module load cuda/12.6
 #run_name="astrodino_f150w_vitb_dev"
 #config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vitb_f150w.yaml"
 
-run_name="astrodino_f150w_vits_dev"
-config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vits_f150w.yaml"
+run_name="astrodino_f150w_vitb_ps6_bs128"
+config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_f150w_vitb_ps6_bs128.yaml"
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
