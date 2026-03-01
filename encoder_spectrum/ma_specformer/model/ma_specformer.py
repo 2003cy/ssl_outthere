@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .masking import mask_input
 from .modules import LayerNorm, TransformerBlock, _init_by_depth
 
 
@@ -28,13 +29,15 @@ class MASpecFormer(L.LightningModule):
         num_layers: int = 6,
         num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        mask_ratio: float = 0.15,  # Fraction of tokens to randomly mask for reconstruction
-        min_unmasked: int = 1,  # Minimum unmasked tokens (to preserve some context)
+        mask_ratio: float = 0.15,       # Total fraction of valid pixels to mask
+        min_unmasked: int = 1,          # Minimum unmasked tokens (to preserve some context)
         dropout: float = 0.1,
         bias: bool = True,
-        min_std: float = 0.1,  # Minimum std for normalization (avoid div by zero and unstable gradients)
-        block_size: int = 1,  # Contiguous block masking width (1 = random pixel masking)
-        cls_aux_weight: float = 0.1,  # Weight for CLS auxiliary loss (0 = disabled)
+        min_std: float = 0.1,           # Minimum std for normalization
+        max_line_blocks: int = 3,       # Mask up to this many emission-line centered blocks (0 = pure random)
+        line_block_size: int = 3,       # Pixels per line block, centered on peak (1=peak only, 3=peak±1, …)
+        line_prominence: float = 1.0,   # scipy find_peaks prominence threshold on normalised flux
+        cls_aux_weight: float = 0.1,    # Weight for CLS auxiliary loss (0 = disabled)
     ):
         """
         Args:
@@ -42,11 +45,14 @@ class MASpecFormer(L.LightningModule):
             num_layers: Number of transformer blocks
             num_heads: Number of attention heads
             mlp_ratio: Hidden layer ratio in MLP
-            mask_ratio: Fraction of tokens to mask for self-supervised training
+            mask_ratio: Total fraction of valid pixels to mask per spectrum
             min_unmasked: Minimum number of unmasked tokens per sample
             dropout: Dropout rate
             bias: Whether to use bias in linear layers
             min_std: Minimum std for normalization to avoid division by small numbers
+            max_line_blocks: Max emission-line blocks to place (by prominence); 0 = pure random
+            line_block_size: Width of each centered block around a detected line peak
+            line_prominence: Prominence threshold for scipy.signal.find_peaks on normalised flux
         """
         super().__init__()
         self.save_hyperparameters()
@@ -91,19 +97,22 @@ class MASpecFormer(L.LightningModule):
         # CLS reconstruction head: decodes the full spectrum from CLS + wavelength position.
         #
         # At each position p, the decode input is:
-        #   cls_embedding (B, D)  +  pos_emb[p] (D)
+        #   cat([cls_embedding (B, D), pos_emb[p] (D)]) → (B, 2D)
+        #
+        # Concatenation (not addition) keeps global context and positional encoding
+        # in separate channels, so the first linear layer can independently weight
+        # each source before computing cross-term interactions via GELU.  Addition
+        # collapses both into one D-dim vector and forces the MLP to implicitly
+        # disentangle them, which limits expressiveness for position-dependent
+        # features like emission lines.
         #
         # Loss is computed on ALL valid positions (not just masked ones), which
         # forces CLS to encode the complete spectral shape rather than just a
         # summary statistic.  This acts as a true information bottleneck:
         # the only path from the full spectrum to a per-position prediction is
         # through the CLS token.
-        #
-        # Use a 2-layer MLP (not a single Linear) so the head can model
-        # non-linear interactions between global context and wavelength position,
-        # which is important for sharp spectral features like emission lines.
         self.cls_recon_head = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim, bias=True),
+            nn.Linear(2 * embed_dim, embed_dim, bias=True),
             nn.GELU(),
             nn.Linear(embed_dim, 1, bias=True),
         )
@@ -122,31 +131,57 @@ class MASpecFormer(L.LightningModule):
         # Initialize CLS token
         nn.init.trunc_normal_(self.cls_token, std=0.02)
 
-        # Apply depth-aware scaling to transformer blocks
-        self.blocks.apply(lambda m: _init_by_depth(m, 1.0 / self.num_layers))
+        # GPT-2 style depth-aware scaling: apply ONLY to the two residual output
+        # projections per block (attn.proj and mlp.fc2).  Formula:
+        #   std = base_std / sqrt(2 * num_layers)
+        #       = (1/sqrt(embed_dim)) / sqrt(2*N)
+        #       = 1 / sqrt(2 * N * embed_dim)
+        # This gives a value strictly smaller than base_std for any N >= 1,
+        # dampening the residual stream at init and improving stability.
+        depth_std = 1.0 / math.sqrt(2 * self.num_layers * self.embed_dim)
+        for block in self.blocks:
+            nn.init.normal_(block.attn.proj.weight, std=depth_std)
+            nn.init.normal_(block.mlp.fc2.weight, std=depth_std)
+            if block.attn.proj.bias is not None:
+                nn.init.constant_(block.attn.proj.bias, 0)
+            if block.mlp.fc2.bias is not None:
+                nn.init.constant_(block.mlp.fc2.bias, 0)
 
     @staticmethod
     def _wavelength_positional_encoding(
         wavelengths: Tensor,
         embed_dim: int,
         device: torch.device,
+        valid_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """Fourier position encoding from wavelength values.
-        
+
         Args:
             wavelengths: shape (B, T) or (T,), wavelength values
             embed_dim: Output dimension
             device: Device to place result on
-        
+            valid_mask: shape (B, T) bool, True = valid pixel.  When provided,
+                        min/max are computed only over valid positions so that
+                        batch-padding zeros do not corrupt the normalisation.
+
         Returns:
             pos_emb: shape (..., embed_dim), positional encoding
         """
         # Normalize wavelengths to [0, 1] per-sample for stable Fourier encoding.
         # Per-sample (not batch-global) so that each spectrum's position encoding
         # is independent of other spectra in the batch (critical for variable-length data).
+        # Use valid_mask to exclude padding zeros from min/max when available.
         if wavelengths.dim() == 2:  # (B, T)
-            wl_min = wavelengths.min(dim=1, keepdim=True).values  # (B, 1)
-            wl_max = wavelengths.max(dim=1, keepdim=True).values  # (B, 1)
+            if valid_mask is not None:
+                # Replace invalid positions with +inf / -inf before taking min/max
+                # so that padding zeros don't drag wl_min down to 0.
+                _large = wavelengths.new_full(wavelengths.shape, float("inf"))
+                _small = wavelengths.new_full(wavelengths.shape, float("-inf"))
+                wl_min = torch.where(valid_mask, wavelengths, _large).min(dim=1, keepdim=True).values
+                wl_max = torch.where(valid_mask, wavelengths, _small).max(dim=1, keepdim=True).values
+            else:
+                wl_min = wavelengths.min(dim=1, keepdim=True).values  # (B, 1)
+                wl_max = wavelengths.max(dim=1, keepdim=True).values  # (B, 1)
         else:  # (T,)
             wl_min = wavelengths.min()
             wl_max = wavelengths.max()
@@ -226,7 +261,7 @@ class MASpecFormer(L.LightningModule):
         # Use pre-computed pos_emb if provided (avoids redundant computation in forward())
         if _pos_emb is None:
             _pos_emb = self._wavelength_positional_encoding(
-                wavelengths, self.embed_dim, flux.device
+                wavelengths, self.embed_dim, flux.device, valid_mask=valid_mask
             )
         pos_emb = _pos_emb
 
@@ -285,7 +320,7 @@ class MASpecFormer(L.LightningModule):
             token_embeddings (B, T, D)    per-token transformer outputs
         """
         # Compute pos_emb once here so both encode() and cls_recon_head can use it
-        pos_emb = self._wavelength_positional_encoding(wavelengths, self.embed_dim, flux.device)
+        pos_emb = self._wavelength_positional_encoding(wavelengths, self.embed_dim, flux.device, valid_mask=valid_mask)
 
         x = self.encode(flux, wavelengths, valid_mask, stats=stats, _pos_emb=pos_emb)  # (B, T+1, D)
 
@@ -295,9 +330,10 @@ class MASpecFormer(L.LightningModule):
         # Token-level reconstruction (local context)
         reconstructions = self.head(token_embeddings).squeeze(-1)  # (B, T)
 
-        # CLS global reconstruction: CLS + pos_emb → flux at each wavelength
-        cls_decode = cls_embedding.unsqueeze(1) + pos_emb          # (B, T, D)
-        cls_recons = self.cls_recon_head(cls_decode).squeeze(-1)   # (B, T)
+        # CLS global reconstruction: cat(cls, pos_emb) → flux at each wavelength
+        cls_expanded = cls_embedding.unsqueeze(1).expand(-1, pos_emb.shape[1], -1)  # (B, T, D)
+        cls_decode   = torch.cat([cls_expanded, pos_emb], dim=-1)                   # (B, T, 2D)
+        cls_recons   = self.cls_recon_head(cls_decode).squeeze(-1)                  # (B, T)
 
         return {
             "reconstructions":  reconstructions,
@@ -312,7 +348,7 @@ class MASpecFormer(L.LightningModule):
         Mask strategy:
         - valid_mask: data quality mask (True = valid) → used in attention (invalid positions not attended)
         - train_mask: random mask for reconstruction (True = masked) → only affects input values
-        - loss computed only on masked valid positions
+        - loss_mask = train_mask & valid_mask → both token and CLS losses computed here only
         - Target is NORMALIZED flux (stable training)
         
         Batch dict contains:
@@ -351,15 +387,20 @@ class MASpecFormer(L.LightningModule):
         else:
             recon_loss = torch.tensor(0.0, device=flux.device)
 
-        # CLS global reconstruction loss — all valid positions
-        cls_loss    = torch.tensor(0.0, device=flux.device)
-        valid_float = valid_mask.float() 
-        if self.hparams.cls_aux_weight > 0 and valid_float.sum() > 0:
+        # CLS global reconstruction loss — ALL valid positions (not just masked).
+        # cls_recon_head uses only [CLS, pos_emb] as input (no token embeddings),
+        # so CLS is the sole information channel.  Computing the loss on all valid
+        # positions forces CLS to encode the complete spectral template, which is
+        # the representation needed for downstream redshift prediction.
+        # This gives CLS a distinct objective from the token head (masked-only).
+        valid_mask_float = valid_mask.float()
+        cls_loss = torch.tensor(0.0, device=flux.device)
+        if self.hparams.cls_aux_weight > 0 and valid_mask_float.sum() > 0:
             cls_loss = F.mse_loss(
-                cls_recons * valid_float,
-                target * valid_float,
+                cls_recons * valid_mask_float,
+                target * valid_mask_float,
                 reduction="sum",
-            ) / valid_float.sum().clamp(min=1)
+            ) / valid_mask_float.sum().clamp(min=1)
 
         loss = recon_loss + self.hparams.cls_aux_weight * cls_loss
 
@@ -383,17 +424,10 @@ class MASpecFormer(L.LightningModule):
         flux_mean_avg = mean.mean()
         flux_std_avg = std.mean()
         
-        # Learning rate (from optimizer) — only available inside a Trainer
-        try:
-            current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        except Exception:
-            current_lr = 0.0
-        
-        # Log all metrics
+        # Log all metrics  (lr is logged by WarmupCosineLR callback)
         self.log("train_loss", loss, prog_bar=True, on_step=True)
         self.log("recon_loss", recon_loss, on_step=True)
         self.log("cls_loss", cls_loss, on_step=True)
-        self.log("lr", current_lr, on_step=True)
         self.log("mask_count", mask_count, on_step=True)
         self.log("valid_count", valid_count, on_step=True)
         self.log("mask_ratio_actual", mask_ratio_actual, on_step=True)
@@ -521,70 +555,12 @@ class MASpecFormer(L.LightningModule):
         return normalized_flux, mean, std
 
     def _mask_input(self, flux: Tensor, valid_mask: Tensor) -> Tuple[Tensor, Tensor]:
-        """Apply random mask to flux values.
-
-        When block_size == 1 (default): each valid pixel is independently masked
-        with probability mask_ratio (original behaviour).
-
-        When block_size > 1: contiguous blocks of *block_size* pixels are masked.
-        The number of blocks is chosen so that the expected fraction of masked
-        pixels matches mask_ratio.  Block starts are sampled randomly from valid
-        positions; each block spans [start, start+block_size) clipped to [0, T).
-        Pixels in a block are only masked if they are valid.
-
-        This biases the model toward reconstructing spectral features (emission
-        lines, continuum breaks) rather than individual noisy pixels.
-
-        Args:
-            flux:       (B, T) flux values
-            valid_mask: (B, T) bool, True = valid pixel
-
-        Returns:
-            masked_flux: (B, T), masked valid positions set to 0
-            train_mask:  (B, T) bool, True where pixel was masked
-        """
-        B, T = flux.shape
-        mask_ratio  = self.hparams.mask_ratio
-        block_size  = self.hparams.block_size
-
-        masked_flux = flux.clone()
-        train_mask  = torch.zeros(B, T, dtype=torch.bool, device=flux.device)
-
-        for i in range(B):
-            valid_indices = valid_mask[i].nonzero(as_tuple=True)[0]
-            num_valid = len(valid_indices)
-
-            if num_valid <= self.hparams.min_unmasked:
-                continue
-
-            if block_size <= 1:
-                # ── original per-pixel random masking ──────────────────────
-                num_to_mask = max(1, int(num_valid * mask_ratio))
-                perm        = torch.randperm(num_valid, device=flux.device)[:num_to_mask]
-                mask_idx    = valid_indices[perm]
-                masked_flux[i, mask_idx] = 0.0
-                train_mask[i, mask_idx]  = True
-            else:
-                # ── contiguous block masking ───────────────────────────────
-                # Number of blocks to place so ~mask_ratio of valid pixels are
-                # covered.  Each block covers at most block_size valid pixels.
-                num_blocks = max(1, int(num_valid * mask_ratio / block_size))
-
-                # Sample block start positions from valid pixel indices that
-                # can fit a full block (at least block_size pixels remain to
-                # the right), so blocks don't get silently truncated at edges.
-                eligible = valid_indices[valid_indices <= T - block_size]
-                if len(eligible) == 0:
-                    eligible = valid_indices  # fallback: all valid indices
-                perm        = torch.randperm(len(eligible), device=flux.device)
-                start_picks = eligible[perm[:num_blocks]]   # (num_blocks,)
-
-                for start in start_picks.tolist():
-                    # mask pixels in [start, start+block_size), only if valid
-                    end = min(start + block_size, T)
-                    for pos in range(start, end):
-                        if valid_mask[i, pos]:
-                            masked_flux[i, pos] = 0.0
-                            train_mask[i, pos]  = True
-
-        return masked_flux, train_mask
+        """Line-aware masked autoencoding — see model.masking for the full algorithm."""
+        return mask_input(
+            flux, valid_mask,
+            mask_ratio      = self.hparams.mask_ratio,
+            min_unmasked    = self.hparams.min_unmasked,
+            max_line_blocks = self.hparams.max_line_blocks,
+            line_block_size = self.hparams.line_block_size,
+            line_prominence = self.hparams.line_prominence,
+        )
