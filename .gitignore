@@ -37,3 +37,4 @@ images/galaxy_zoo
 .venv/*
 *.csv
 settings.json
+sync.sh
