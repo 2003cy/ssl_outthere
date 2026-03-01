@@ -38,3 +38,4 @@ images/galaxy_zoo
 *.csv
 settings.json
 sync.sh
+.claude/*
