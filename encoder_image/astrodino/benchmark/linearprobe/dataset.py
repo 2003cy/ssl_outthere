@@ -2,6 +2,7 @@
 Dataset classes for linear probe evaluation.
 """
 import os
+import sys
 import numpy as np
 import h5py
 import torch
@@ -9,9 +10,9 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
 
-import sys
 sys.path.insert(0, "/u/yacheng/projects/ssl_outthere")
-from encoder_image.astrodino.train.data.augmentations import ToRGB
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from preprocessing import get_torgb
 
 
 class JWSTMorphDataset(Dataset):
@@ -27,11 +28,13 @@ class JWSTMorphDataset(Dataset):
         balanced: If True, undersample majority classes to match minority class count
         samples_per_class: If set (>0), use this many samples per class (overrides balanced)
         delta_threshold: Maximum delta_f150w value to include (default 0.5, set to None to disable)
+        effective_radius_min: Minimum allowed effective radius in pixels (from f['radius_sersic'] converted using 30 mas/pixel)
     """
     def __init__(self, root: str, crop_size: int = 90, max_samples: int = -1, seed: int = 42,
-                 balanced: bool = False, samples_per_class: int = -1, delta_threshold: float = 0.5):
+                 balanced: bool = False, samples_per_class: int = -1, delta_threshold: float = 0.5,
+                 effective_radius_min: float = None, cfg=None):
         self.crop_size = crop_size
-        self.to_rgb = ToRGB()
+        self.to_rgb, self.in_chans = get_torgb(cfg)
         self.center_crop = transforms.CenterCrop(crop_size)
         self.rng = np.random.default_rng(seed=seed)
         
@@ -67,13 +70,23 @@ class JWSTMorphDataset(Dataset):
             valid_mask = np.isfinite(morph_flag) & np.isfinite(delta)
             if delta_threshold is not None:
                 valid_mask = valid_mask & (delta < delta_threshold)
+            if effective_radius_min is not None:
+                if 'radius_sersic' not in f:
+                    valid_mask[:] = False
+                else:
+                    re = f['radius_sersic'][:]
+                    re_pix = re * (3600 * 1000 / 30)
+                    valid_mask = valid_mask & np.isfinite(re_pix) & (re_pix >= effective_radius_min)
             valid_local_indices = np.where(valid_mask)[0]
             
             for local_idx in valid_local_indices:
                 label = int(morph_flag[local_idx])
                 self._valid_indices.append((file_idx, local_idx, label))
         
-        print(f"Total valid samples (delta < {delta_threshold}): {len(self._valid_indices)}")
+        print(
+            f"Total valid samples (delta < {delta_threshold}, radius_sersic_pix >= {effective_radius_min}): "
+            f"{len(self._valid_indices)}"
+        )
         
         # Apply balanced sampling or samples_per_class
         if samples_per_class > 0 or balanced:
@@ -133,21 +146,17 @@ class JWSTMorphDataset(Dataset):
     def __getitem__(self, index):
         file_idx, local_idx, label = self._valid_indices[index]
         
-        # Load image
+        # Load image  (H, W) single band
         img = self._files[file_idx]['image'][local_idx].astype('float32')
-        
-        # Convert single channel to 3 channel
-        img = np.repeat(img[np.newaxis, :, :], 3, axis=0)  # (3, H, W)
-        
-        # Convert to tensor
-        tensor = torch.from_numpy(img)
-        
-        # Apply center crop
-        tensor = self.center_crop(tensor)
-        
-        # Apply ToRGB normalization
-        tensor = torch.from_numpy(self.to_rgb(tensor.numpy()))
-        
+
+        # For 3-channel models repeat before crop so ToRGB3Band gets (3,H,W);
+        # for 1-channel models keep (1,H,W).
+        n = self.in_chans if self.in_chans > 1 else 1
+        img = np.repeat(img[np.newaxis], n, axis=0)     # (C, H, W)
+
+        tensor = self.center_crop(torch.from_numpy(img))
+        tensor = torch.from_numpy(self.to_rgb(tensor.numpy()))  # (C, H, W)
+
         return tensor, label
     
     def close(self):
