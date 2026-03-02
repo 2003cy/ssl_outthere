@@ -1,11 +1,13 @@
 """LightningDataModule for multimodal fusion training."""
 
+import warnings
 from typing import Optional
 
+import h5py
 import numpy as np
 import torch
 from torch import Tensor
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 import lightning as L
 
 from .dataset import FusionEmbeddingDataset
@@ -23,22 +25,42 @@ def _fusion_collate(batch: list[dict]) -> dict[str, Tensor]:
 class FusionDataModule(L.LightningDataModule):
     """DataModule for multimodal contrastive learning with precomputed embeddings.
 
-    Expects one ``.npy`` file per modality, each of shape ``(N, D)``.  Rows with
+    Expects a single HDF5 file with one dataset per modality.  Rows with
     all-NaN embeddings are treated as missing for that modality.
 
     Args:
-        modality_paths:  ``{name: "/path/to/embeddings.npy"}`` mapping.
-        batch_size:      Training / validation batch size.
-        num_workers:     DataLoader worker processes.
-        train_val_split: Fraction of data used for training (rest = validation).
+        h5_path:           Path to HDF5 file containing embedding arrays.
+        modality_keys:     ``{modality_name: h5_key}`` mapping,
+                           e.g. ``{"image": "image_embed", "spectrum": "spectrum_embed"}``.
+        batch_size:        Training / validation batch size.
+        num_workers:       DataLoader worker processes.
+        train_val_split:   Fraction of data used for training (rest = validation).
+        modality_mask_prob: Per-modality masking probability applied to the
+                           *training* split only (0.0 = no masking).  See
+                           FusionEmbeddingDataset for details.
+        min_sn50:          Exclude samples with ``sn50 < min_sn50`` (requires
+                           an ``sn50`` dataset in the H5 file, e.g. saved by
+                           extract_embeddings_jda.py).  0.0 = no filter.
+                           Analogous to encoder_spectrum's ``min_sn50``.
+        min_n_valid:       Exclude samples with fewer than this many valid
+                           spectral pixels (requires ``n_valid`` in H5).
+                           Analogous to encoder_spectrum's ``min_length``.
+        max_n_valid:       Exclude samples with more than this many valid
+                           spectral pixels.  999999 = no upper limit.
+                           Analogous to encoder_spectrum's ``max_length``.
     """
 
     def __init__(
         self,
-        modality_paths: dict[str, str],
+        h5_path: str,
+        modality_keys: dict[str, str],
         batch_size: int = 256,
         num_workers: int = 4,
         train_val_split: float = 0.9,
+        modality_mask_prob: float = 0.0,
+        min_sn50: float = 0.0,
+        min_n_valid: int = 0,
+        max_n_valid: int = 999999,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -47,28 +69,67 @@ class FusionDataModule(L.LightningDataModule):
 
     @property
     def input_dims(self) -> dict[str, int]:
-        """Read embedding dims directly from .npy file shapes (memory-mapped, cheap).
+        """Read embedding dims directly from HDF5 dataset shapes (cheap).
 
         Available before setup() is called — safe to use in model.setup().
         """
-        return {
-            name: np.load(path, mmap_mode="r").shape[1]
-            for name, path in self.hparams.modality_paths.items()
-        }
+        with h5py.File(self.hparams.h5_path, "r") as f:
+            return {
+                name: f[key].shape[1]
+                for name, key in self.hparams.modality_keys.items()
+            }
 
     def setup(self, stage: Optional[str] = None) -> None:
         if self.train_dataset is not None:
             return  # already set up
 
-        full_dataset = FusionEmbeddingDataset(self.hparams.modality_paths)
-        n_total = len(full_dataset)
-        n_train = int(n_total * self.hparams.train_val_split)
-        n_val = n_total - n_train
+        with h5py.File(self.hparams.h5_path, "r") as f:
+            first_key = next(iter(self.hparams.modality_keys.values()))
+            n_total = f[first_key].shape[0]
 
-        self.train_dataset, self.val_dataset = random_split(
-            full_dataset,
-            [n_train, n_val],
-            generator=torch.Generator().manual_seed(42),
+            # ── Data selection (mirrors encoder_spectrum min_sn50 / min_length) ──
+            selection = np.ones(n_total, dtype=bool)
+
+            if self.hparams.min_sn50 > 0.0:
+                if "sn50" in f:
+                    selection &= f["sn50"][:] >= self.hparams.min_sn50
+                else:
+                    warnings.warn(
+                        f"min_sn50={self.hparams.min_sn50} requested but 'sn50' "
+                        f"not found in {self.hparams.h5_path} — filter skipped."
+                    )
+
+            if self.hparams.min_n_valid > 0 or self.hparams.max_n_valid < 999999:
+                if "n_valid" in f:
+                    nv = f["n_valid"][:]
+                    selection &= (nv >= self.hparams.min_n_valid) & (nv <= self.hparams.max_n_valid)
+                else:
+                    warnings.warn(
+                        f"n_valid filter requested but 'n_valid' not found in "
+                        f"{self.hparams.h5_path} — filter skipped."
+                    )
+
+        indices = np.where(selection)[0]
+        n_kept = len(indices)
+        if n_kept < n_total:
+            print(f"[FusionDataModule] selection: {n_kept}/{n_total} samples kept")
+
+        # Reproducible shuffle then split on the filtered set
+        rng = np.random.default_rng(42)
+        rng.shuffle(indices)
+        n_train = int(n_kept * self.hparams.train_val_split)
+
+        self.train_dataset = FusionEmbeddingDataset(
+            h5_path=self.hparams.h5_path,
+            modality_keys=self.hparams.modality_keys,
+            indices=indices[:n_train],
+            modality_mask_prob=self.hparams.modality_mask_prob,
+        )
+        self.val_dataset = FusionEmbeddingDataset(
+            h5_path=self.hparams.h5_path,
+            modality_keys=self.hparams.modality_keys,
+            indices=indices[n_train:],
+            modality_mask_prob=0.0,  # no masking during validation
         )
 
     def train_dataloader(self) -> DataLoader:

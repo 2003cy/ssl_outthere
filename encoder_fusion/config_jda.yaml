@@ -5,29 +5,35 @@ seed_everything: 42
 # Model
 # ──────────────────────────────────────────────────────────
 model:
-  latent_dim: 64
-  temperature: 0.07
+  latent_dim: 256
+  temperature: 0.2
   lr: 2.0e-4
-  weight_decay: 0.2
+  weight_decay: 0.01
 
   modalities:
     image:
-      input_dim: null     # auto-detected from image.npy (astrodino_f150w_vitb_ps6_bs128 → 512)
-      hidden_dim: 128
+      input_dim: null     # auto-detected from image_embed (astrodino_f150w_vitb_ps6_bs128 → 512)
+      hidden_dim: [256, 256]
     spectrum:
-      input_dim: null     # auto-detected from spectrum.npy (jda_prism_f100lp → 128)
-      hidden_dim: 64
+      input_dim: null     # auto-detected from spectrum_embed (jda_prism_f100lp → 128)
+      hidden_dim: [128,256]
 
 # ──────────────────────────────────────────────────────────
 # Data  (embeddings from jda_spectra_low_image.h5)
 # ──────────────────────────────────────────────────────────
 data:
-  modality_paths:
-    image:    /raven/u/yacheng/projects/ssl_outthere/encoder_fusion/data/embeddings/jda/image.npy
-    spectrum: /raven/u/yacheng/projects/ssl_outthere/encoder_fusion/data/embeddings/jda/spectrum.npy
+  h5_path: ../images/JDA/jda_spectra_low_image.h5
+  modality_keys:
+    image:    image_embed
+    spectrum: spectrum_embed
   batch_size: 256
   num_workers: 4
   train_val_split: 0.9
+  modality_mask_prob: 0.0   # set > 0 (e.g. 0.1) to randomly mask modalities during training
+  # Data selection — analogous to encoder_spectrum's min_sn50 / min_length / max_length
+  min_sn50: 0             # exclude spectra with sn50 < this (0 = no cut; requires sn50 in H5)
+  min_n_valid: 0            # exclude spectra with fewer valid pixels (0 = no cut)
+  max_n_valid: 100     # exclude spectra with more valid pixels (999999 = no cut)
 
 # ──────────────────────────────────────────────────────────
 # Trainer
@@ -56,8 +62,8 @@ trainer:
     - class_path: model.callbacks.WarmupCosineLR
       init_args:
         warmup_steps: 200
-        base_lr: 2.0e-4
-        min_lr: 1.0e-5
+        base_lr: 5.0e-4
+        min_lr: 5.0e-5
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         filename: "ckpt-{epoch:02d}-{val_loss:.4f}"

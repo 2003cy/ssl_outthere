@@ -8,7 +8,7 @@ Design goals:
 """
 
 from itertools import combinations
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -21,27 +21,35 @@ from .losses import info_nce_loss
 class ModalityProjector(nn.Module):
     """Projects a modality CLS embedding to the shared latent space.
 
-    Architecture:
-        - With hidden_dim:  Linear(input_dim → hidden_dim) → GELU → Linear(hidden_dim → latent_dim) → LayerNorm
-        - Without:          Linear(input_dim → latent_dim) → LayerNorm
+    Architecture (hidden_dim as list [h1, h2, ...]):
+        Linear(input_dim → h1) → GELU → Linear(h1 → h2) → GELU → … → Linear(hN → latent_dim) → LayerNorm
+        hidden_dim=None → Linear(input_dim → latent_dim) → LayerNorm  (no hidden layers)
+        hidden_dim=int  → treated as [int]  (single hidden layer, backward compatible)
 
     The output is L2-normalized so that cosine similarity = dot product.
     """
 
-    def __init__(self, input_dim: int, latent_dim: int, hidden_dim: Optional[int] = None):
+    def __init__(
+        self,
+        input_dim: int,
+        latent_dim: int,
+        hidden_dim: Optional[Union[int, list]] = None,
+    ):
         super().__init__()
         if hidden_dim is None:
-            self.net = nn.Sequential(
-                nn.Linear(input_dim, latent_dim),
-                nn.LayerNorm(latent_dim),
-            )
+            dims = [input_dim, latent_dim]
+        elif isinstance(hidden_dim, int):
+            dims = [input_dim, hidden_dim, latent_dim]
         else:
-            self.net = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, latent_dim),
-                nn.LayerNorm(latent_dim),
-            )
+            dims = [input_dim] + list(hidden_dim) + [latent_dim]
+
+        layers: list[nn.Module] = []
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i + 1]))
+            if i < len(dims) - 2:
+                layers.append(nn.GELU())
+        layers.append(nn.LayerNorm(latent_dim))
+        self.net = nn.Sequential(*layers)
         self._init_weights()
 
     def _init_weights(self):
@@ -133,6 +141,11 @@ class MultimodalFusion(nn.Module):
                     f"Modality '{name}' not registered. "
                     f"Call register_modality('{name}', input_dim=...) first."
                 )
+            # Zero out missing-modality rows before projecting to prevent NaN
+            # gradients: F.normalize backward on NaN inputs (even with zero
+            # incoming grad) produces NaN, which poisons projector weight grads.
+            x = x.clone()
+            x[~availability[name]] = 0.0
             embeddings[name] = self.projectors[name](x)
         return embeddings
 

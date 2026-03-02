@@ -137,10 +137,13 @@ class MultimodalFusionModule(L.LightningModule):
     # Lightning steps
     # ------------------------------------------------------------------
 
-    def training_step(self, batch: dict, batch_idx: int) -> Tensor:
+    def training_step(self, batch: dict, batch_idx: int) -> Optional[Tensor]:
         inputs, availability = self._parse_batch(batch)
         embeddings = self.fusion(inputs, availability)
         loss, loss_dict = self.fusion.compute_pairwise_loss(embeddings, availability)
+
+        if not loss_dict:
+            return None  # no valid pairs in this batch; skip optimizer step
 
         self.log("train_loss", loss, prog_bar=True, on_step=True)
         for key, val in loss_dict.items():
@@ -148,10 +151,13 @@ class MultimodalFusionModule(L.LightningModule):
 
         return loss
 
-    def validation_step(self, batch: dict, batch_idx: int) -> Tensor:
+    def validation_step(self, batch: dict, batch_idx: int) -> Optional[Tensor]:
         inputs, availability = self._parse_batch(batch)
         embeddings = self.fusion(inputs, availability)
         loss, loss_dict = self.fusion.compute_pairwise_loss(embeddings, availability)
+
+        if not loss_dict:
+            return None  # no valid pairs in this batch; skip logging
 
         self.log("val_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
         for key, val in loss_dict.items():

@@ -6,8 +6,8 @@ For each entry in jda_spectra_low.h5:
   1. Find the grizli F150W mosaic via jda_low_res.csv (srcid → file_phot)
   2. Cut 192x192 patch @ 20mas native scale (= 128*1.5 to cover 128px @ 30mas)
   3. Skip if fraction of zero pixels > 30%
-  4. Convert nJy/pixel → MJy/sr  (same convention as COSMOS-Web h5 files)
-  5. Reproject to 128x128 @ 30mas with reproject_exact
+  4. Reproject to 128x128 @ 30mas with reproject_exact
+     (no unit conversion — grizli mosaics are already in MJy/sr, same as COSMOS-Web)
   6. Write image + ALL spectrum columns from jda_spectra_low.h5 to new h5
 
 Multithreading strategy: one thread per mosaic file (group objects by mosaic,
@@ -47,15 +47,13 @@ warnings.filterwarnings("ignore", message=".*reproject_exact.*precision.*", cate
 NATIVE_MAS    = 20      # grizli mosaic native pixel scale (mas/pixel)
 TARGET_MAS    = 30      # output pixel scale (mas/pixel)
 OUTPUT_SIZE   = 128     # output image side length in pixels at TARGET_MAS
-MAX_ZERO_FRAC = 0.30    # reject cutout if fraction of 0 pixels exceeds this
+MAX_ZERO_FRAC = 0.20    # reject cutout if fraction of 0 pixels exceeds this
 
 _scale       = TARGET_MAS / NATIVE_MAS                           # 1.5
 CUTOUT_NAT   = int(OUTPUT_SIZE * _scale)                         # 192 px @ 20mas
 
-# nJy/pixel → MJy/sr at native pixel scale (identical to COSMOS-Web pipeline)
-_pix_arcsec2  = (NATIVE_MAS * 1e-3) ** 2                        # arcsec²
-_pix_sr       = _pix_arcsec2 * (np.pi / (180.0 * 3600.0)) ** 2  # sr
-NJY_TO_MJY_SR = 1e-15 / _pix_sr                                 # multiply by this
+# The grizli JDA mosaics are already in MJy/sr (JWST pipeline standard),
+# identical to COSMOS-Web. No unit conversion is needed.
 
 # All columns in jda_spectra_low.h5 (copied verbatim, filtered to valid rows)
 SPEC_COLS = ["wave", "flux", "sn50", "z_best", "srcid", "objid",
@@ -97,7 +95,7 @@ def process_mosaic_group(
                     dec    = float(obj["dec"])
                     coord  = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
 
-                    # ── 20mas cutout (nJy/pixel) ──────────────────────────────
+                    # ── 20mas cutout (MJy/sr) ────────────────────────────────
                     cutout = Cutout2D(
                         data, coord,
                         size=(CUTOUT_NAT, CUTOUT_NAT),
@@ -110,11 +108,6 @@ def process_mosaic_group(
                     zero_frac = float(np.sum(cutout_20mas == 0)) / cutout_20mas.size
                     if zero_frac > MAX_ZERO_FRAC:
                         continue  # drop this object
-
-                    # ── Unit conversion: nJy/pixel → MJy/sr ──────────────────
-                    # reproject_exact is flux-conserving for surface brightness;
-                    # converting before reprojection is the correct approach.
-                    cutout_sb = cutout_20mas * NJY_TO_MJY_SR
 
                     # ── Output WCS: 30mas pixel scale, source centred ─────────
                     out_wcs = cutout_wcs.deepcopy()
@@ -130,7 +123,7 @@ def process_mosaic_group(
 
                     # ── Reproject to 128×128 @ 30mas ─────────────────────────
                     img_30mas, _ = reproject_exact(
-                        (cutout_sb, cutout_wcs),
+                        (cutout_20mas, cutout_wcs),
                         out_wcs,
                         shape_out=(OUTPUT_SIZE, OUTPUT_SIZE),
                     )
@@ -179,7 +172,7 @@ def main(argv=None) -> None:
     print(f"[info] cutout size  : {CUTOUT_NAT}x{CUTOUT_NAT} px @ {NATIVE_MAS}mas "
           f"→ {OUTPUT_SIZE}x{OUTPUT_SIZE} px @ {TARGET_MAS}mas")
     print(f"[info] zero-frac QC : reject if > {MAX_ZERO_FRAC*100:.0f}% zero pixels")
-    print(f"[info] nJy→MJy/sr   : {NJY_TO_MJY_SR:.6f}")
+    print(f"[info] unit         : MJy/sr (grizli mosaics, no conversion applied)")
 
     # ── Build srcid → mosaic filename mapping from CSV ────────────────────────
     print(f"\n[info] loading CSV: {csv_path}")

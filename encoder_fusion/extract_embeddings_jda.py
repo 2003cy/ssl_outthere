@@ -6,9 +6,12 @@ Data source: images/JDA/jda_spectra_low_image.h5
   - flux:  (N, 56)        float32  uJy
   - wave:  (N, 56)        float32  micron
 
-Outputs (saved to encoder_fusion/data/embeddings/jda/):
-  - image.npy    (N, 512)  — AstroDINO CLS tokens
-  - spectrum.npy (N, 128)  — MASpecFormer CLS tokens
+Output (written back into jda_spectra_low_image.h5 as new datasets):
+  - image_embed    (N, 512)  — AstroDINO CLS tokens
+  - spectrum_embed (N, 128)  — MASpecFormer CLS tokens
+  - n_valid        (N,)      — number of valid spectral pixels per object
+
+Existing datasets with the same names are deleted and recreated (safe to re-run).
 
 Usage (from encoder_image/astrodino so sys.path picks up dinov2 + preprocessing):
     cd /raven/u/yacheng/projects/ssl_outthere/encoder_image/astrodino
@@ -26,20 +29,21 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from tqdm import tqdm
 
+os.environ["XFORMERS_DISABLED"] = "1"   # must be set before dinov2 is imported
+
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "encoder_image" / "astrodino" / "benchmark"))
 
 # ── Config ──────────────────────────────────────────────────────────────────
-JDA_H5     = PROJECT_ROOT / "images" / "JDA" / "jda_spectra_low_image.h5"
-OUTPUT_DIR = PROJECT_ROOT / "encoder_fusion" / "data" / "embeddings" / "jda"
+JDA_H5 = PROJECT_ROOT / "images" / "JDA" / "jda_spectra_low_image.h5"
 
 IMG_CONFIG  = (PROJECT_ROOT
                / "encoder_image/astrodino/model"
                / "astrodino_f150w_vitb_ps6_bs128/config.yaml")
 IMG_WEIGHTS = (PROJECT_ROOT
                / "encoder_image/astrodino/model"
-               / "astrodino_f150w_vitb_ps6_bs128/eval/training_112999/teacher_checkpoint.pth")
+               / "astrodino_f150w_vitb_ps6_bs128/eval/training_299999/teacher_checkpoint.pth")
 SPEC_CKPT   = (PROJECT_ROOT
                / "encoder_spectrum/ma_specformer/outputs"
                / "jda_prism_f100lp_20260228_151905/ckpt-epoch=143-val_loss=0.3413.ckpt")
@@ -153,7 +157,6 @@ def extract_spectrum_embeddings(model, loader):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Device : {DEVICE}")
     print(f"H5 file: {JDA_H5}")
 
@@ -185,9 +188,7 @@ def main():
     img_ds     = JDAImageDataset(JDA_H5, CROP_SIZE, to_rgb)
     img_loader = DataLoader(img_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
     img_embs   = extract_image_embeddings(img_model, img_loader)
-    out_img    = OUTPUT_DIR / "image.npy"
-    np.save(out_img, img_embs)
-    print(f"  Saved {img_embs.shape} → {out_img}")
+    print(f"  Done — shape {img_embs.shape}")
 
     # ── Extract spectrum embeddings ───────────────────────────────────────────
     print("[4/4] Extracting spectrum embeddings …")
@@ -195,9 +196,33 @@ def main():
     spec_loader = DataLoader(spec_ds, batch_size=BATCH_SIZE, shuffle=False,
                              num_workers=4, collate_fn=spec_collate)
     spec_embs   = extract_spectrum_embeddings(spec_model, spec_loader)
-    out_spec    = OUTPUT_DIR / "spectrum.npy"
-    np.save(out_spec, spec_embs)
-    print(f"  Saved {spec_embs.shape} → {out_spec}")
+    print(f"  Done — shape {spec_embs.shape}")
+
+    # ── Compute n_valid (valid spectral pixels per object) ────────────────────
+    print("\nComputing n_valid …")
+    with h5py.File(JDA_H5, "r") as f:
+        flux_all = f["flux"][:].astype(np.float32)
+        wave_all = f["wave"][:].astype(np.float32)
+    valid_all = (flux_all != 0.0) & np.isfinite(flux_all) & np.isfinite(wave_all)
+    n_valid   = valid_all.sum(axis=1).astype(np.int32)
+    print(f"  n_valid: min={n_valid.min()}  median={int(np.median(n_valid))}  max={n_valid.max()}")
+
+    # ── Write back into source H5 ─────────────────────────────────────────────
+    print(f"\nWriting embeddings → {JDA_H5}")
+    with h5py.File(JDA_H5, "a") as f:
+        for key, data in [
+            ("image_embed",    img_embs),
+            ("spectrum_embed", spec_embs),
+            ("n_valid",        n_valid),
+        ]:
+            if key in f:
+                del f[key]
+            f.create_dataset(key, data=data, compression="gzip")
+            print(f"  {key}: {data.shape}")
+    print(f"\nDatasets now in {JDA_H5.name}:")
+    with h5py.File(JDA_H5, "r") as f:
+        for k in sorted(f.keys()):
+            print(f"  {k}: {f[k].shape}")
 
     print("\nDone.")
 
