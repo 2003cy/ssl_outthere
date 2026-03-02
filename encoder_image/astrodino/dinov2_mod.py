@@ -1,5 +1,5 @@
 #the following patches should be replaaced to the dinov2 codebase, for more flexibility in setting up ViT with fully customizable architecture parameters, and for better handling of pretrained weights with different key names. These changes are needed for our experiments with custom ViT architectures and pretrained weights.
-
+import dinov2.models.__init__
 #apply the following to: dinov2/models/__init__.py
 #-----------existing code in __init__.py----------------
 def build_model(args, only_teacher=False, img_size=224):
@@ -42,7 +42,7 @@ def build_model(args, only_teacher=False, img_size=224):
 #-----------new code in __init__.py----------------
 
 
-
+import dinov2.models.vision_transformer
 #apply the following to: dinov2/models/vision_transformer.py
 #-----------existing code in vision_transformer.py----------------
 def vit_small(patch_size=16, num_register_tokens=0, **kwargs):
