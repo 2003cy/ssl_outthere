@@ -27,7 +27,7 @@ images/galaxy_zoo
 *.gz
 *.png
 *.gif
-
+*.json
 
 
 # pixi environments
