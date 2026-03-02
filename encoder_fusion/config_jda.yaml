@@ -1,0 +1,72 @@
+# python trainer.py fit --config config_jda.yaml
+seed_everything: 42
+
+# ──────────────────────────────────────────────────────────
+# Model
+# ──────────────────────────────────────────────────────────
+model:
+  latent_dim: 64
+  temperature: 0.07
+  lr: 2.0e-4
+  weight_decay: 0.2
+
+  modalities:
+    image:
+      input_dim: null     # auto-detected from image.npy (astrodino_f150w_vitb_ps6_bs128 → 512)
+      hidden_dim: 128
+    spectrum:
+      input_dim: null     # auto-detected from spectrum.npy (jda_prism_f100lp → 128)
+      hidden_dim: 64
+
+# ──────────────────────────────────────────────────────────
+# Data  (embeddings from jda_spectra_low_image.h5)
+# ──────────────────────────────────────────────────────────
+data:
+  modality_paths:
+    image:    /raven/u/yacheng/projects/ssl_outthere/encoder_fusion/data/embeddings/jda/image.npy
+    spectrum: /raven/u/yacheng/projects/ssl_outthere/encoder_fusion/data/embeddings/jda/spectrum.npy
+  batch_size: 256
+  num_workers: 4
+  train_val_split: 0.9
+
+# ──────────────────────────────────────────────────────────
+# Trainer
+# ──────────────────────────────────────────────────────────
+trainer:
+  max_epochs: 100
+  accelerator: gpu
+  devices: [0]
+  strategy: auto
+  precision: 16-mixed
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 1
+  enable_checkpointing: true
+  enable_progress_bar: true
+  default_root_dir: ./outputs
+  logger: false
+  callbacks:
+    - class_path: model.callbacks.RunManager
+      init_args:
+        run_name: fusion_jda_image_spectrum
+        base_dir: ./outputs
+        config_path: ./config_jda.yaml
+    - class_path: model.callbacks.MetricsSaveCallback
+      init_args:
+        save_every_n_steps: 10
+    - class_path: model.callbacks.WarmupCosineLR
+      init_args:
+        warmup_steps: 200
+        base_lr: 2.0e-4
+        min_lr: 1.0e-5
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        filename: "ckpt-{epoch:02d}-{val_loss:.4f}"
+        monitor: val_loss
+        mode: min
+        save_top_k: 3
+        save_last: true
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 20
+        mode: min
