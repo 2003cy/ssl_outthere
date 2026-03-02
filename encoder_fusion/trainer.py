@@ -29,22 +29,31 @@ class MultimodalFusionModule(L.LightningModule):
 
     Modality registration
     ---------------------
-    Pass a ``modalities`` dict in the constructor (or via the YAML config)::
+    Pass a ``modalities`` dict in the constructor (or via the YAML config).
+    Set ``input_dim: null`` to auto-detect from the datamodule's ``.npy`` files::
 
         modalities:
           image:
-            input_dim: 768
+            input_dim: null   # auto-detected from image.npy shape
             hidden_dim: 512
           spectrum:
-            input_dim: 128
+            input_dim: null   # auto-detected from spectrum.npy shape
             hidden_dim: 256
 
-    Adding a new modality later (no architecture changes needed)::
+    Explicit dims are also supported (useful when no datamodule is available)::
 
         modalities:
           photometry:
             input_dim: 64
             hidden_dim: null  # → single linear layer
+
+    Auto-detection flow
+    -------------------
+    - Modalities with ``input_dim: null`` are registered in ``setup()`` once
+      ``self.trainer.datamodule.input_dims`` is available.
+    - Modalities with an explicit ``input_dim`` are registered in ``__init__``.
+    - ``configure_optimizers()`` is called after ``setup()``, so all projector
+      parameters are present when the optimizer is built.
 
     Args:
         latent_dim:    Shared embedding dimension D (default 256).
@@ -52,8 +61,8 @@ class MultimodalFusionModule(L.LightningModule):
         lr:            Base learning rate for AdamW (overridden per-step by
                        WarmupCosineLR callback when used).
         weight_decay:  AdamW weight decay.
-        modalities:    ``{name: {input_dim: int, hidden_dim: int|null}}`` dict
-                       used to register modality projectors at construction time.
+        modalities:    ``{name: {input_dim: int|null, hidden_dim: int|null}}``
+                       dict used to register modality projectors.
     """
 
     def __init__(
@@ -71,11 +80,37 @@ class MultimodalFusionModule(L.LightningModule):
 
         if modalities:
             for name, cfg in modalities.items():
-                self.fusion.register_modality(
-                    name=name,
-                    input_dim=cfg["input_dim"],
-                    hidden_dim=cfg.get("hidden_dim", None),
-                )
+                if cfg.get("input_dim") is not None:
+                    # Explicit dim provided — register immediately.
+                    self.fusion.register_modality(
+                        name=name,
+                        input_dim=cfg["input_dim"],
+                        hidden_dim=cfg.get("hidden_dim", None),
+                    )
+                # else: input_dim is null → deferred to setup()
+
+    # ------------------------------------------------------------------
+    # Setup (deferred modality registration)
+    # ------------------------------------------------------------------
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        """Register modalities whose input_dim was set to null in the config.
+
+        Called by Lightning after datamodule.setup(), so
+        ``self.trainer.datamodule.input_dims`` is already available.
+        """
+        modalities = self.hparams.modalities or {}
+        for name, cfg in modalities.items():
+            if name in self.fusion.projectors:
+                continue  # already registered in __init__
+            # Auto-detect from datamodule
+            input_dim = self.trainer.datamodule.input_dims[name]
+            self.fusion.register_modality(
+                name=name,
+                input_dim=input_dim,
+                hidden_dim=cfg.get("hidden_dim", None),
+            )
+            print(f"[setup] Registered modality '{name}' with auto-detected input_dim={input_dim}")
 
     # ------------------------------------------------------------------
     # Helpers

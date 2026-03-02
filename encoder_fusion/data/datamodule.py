@@ -45,6 +45,17 @@ class FusionDataModule(L.LightningDataModule):
         self.train_dataset: Optional[FusionEmbeddingDataset] = None
         self.val_dataset: Optional[FusionEmbeddingDataset] = None
 
+    @property
+    def input_dims(self) -> dict[str, int]:
+        """Read embedding dims directly from .npy file shapes (memory-mapped, cheap).
+
+        Available before setup() is called — safe to use in model.setup().
+        """
+        return {
+            name: np.load(path, mmap_mode="r").shape[1]
+            for name, path in self.hparams.modality_paths.items()
+        }
+
     def setup(self, stage: Optional[str] = None) -> None:
         if self.train_dataset is not None:
             return  # already set up

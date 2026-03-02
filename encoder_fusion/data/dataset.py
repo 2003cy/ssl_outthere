@@ -104,6 +104,11 @@ class FusionEmbeddingDataset(Dataset):
     def modality_names(self) -> list[str]:
         return list(self._embeddings.keys())
 
+    @property
+    def input_dims(self) -> dict[str, int]:
+        """Return {modality_name: embedding_dim} inferred from loaded arrays."""
+        return {name: arr.shape[1] for name, arr in self._embeddings.items()}
+
     def __len__(self) -> int:
         return len(self._indices)
 

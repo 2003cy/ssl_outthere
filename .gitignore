@@ -29,7 +29,7 @@ images/galaxy_zoo
 *.png
 *.gif
 *.json
-
+*.npy
 
 # pixi environments
 .pixi/*
