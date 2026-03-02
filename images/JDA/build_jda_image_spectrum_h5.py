@@ -24,7 +24,7 @@ import argparse
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import h5py
 import numpy as np
@@ -86,7 +86,7 @@ def process_mosaic_group(
         with fits.open(mosaic_path, memmap=True) as hdul:
             hdu  = hdul[0]
             wcs  = WCS(hdu.header)
-            data = hdu.data  # nJy/pixel
+            data = hdu.data  # MJy/sr (grizli drc_sci native unit, no conversion needed)
 
             for obj in group:
                 try:
