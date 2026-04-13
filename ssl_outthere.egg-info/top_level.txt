@@ -1,3 +1,6 @@
+alignment
+encoder_fusion
 encoder_image
 encoder_spectrum
 images
+tests

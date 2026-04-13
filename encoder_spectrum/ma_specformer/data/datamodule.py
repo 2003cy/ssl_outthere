@@ -166,6 +166,7 @@ class JDASpectrumDataModule(L.LightningDataModule):
         min_sn50: Optional[float] = None,
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
+        min_redshift: Optional[float] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -180,6 +181,7 @@ class JDASpectrumDataModule(L.LightningDataModule):
                 min_sn50=self.hparams.min_sn50,
                 min_length=self.hparams.min_length,
                 max_length=self.hparams.max_length,
+                min_redshift=self.hparams.min_redshift,
             )
             n_total = len(self.dataset)
             n_train = int(n_total * self.hparams.train_val_split)
@@ -202,6 +204,10 @@ class JDASpectrumDataModule(L.LightningDataModule):
         max_len = max(b["flux"].shape[0] for b in batch)
         collated: dict = {}
         for key in batch[0].keys():
+            # Scalar fields (e.g. redshift) — just stack, no padding
+            if batch[0][key].dim() == 0:
+                collated[key] = torch.stack([b[key] for b in batch])
+                continue
             if key == "valid_mask":
                 padded = torch.zeros(len(batch), max_len, dtype=torch.bool)
             else:

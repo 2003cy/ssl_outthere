@@ -38,6 +38,7 @@ class MASpecFormer(L.LightningModule):
         line_block_size: int = 3,       # Pixels per line block, centered on peak (1=peak only, 3=peak±1, …)
         line_prominence: float = 1.0,   # scipy find_peaks prominence threshold on normalised flux
         cls_aux_weight: float = 0.1,    # Weight for CLS auxiliary loss (0 = disabled)
+        redshift_corr: bool = False,    # If True, convert wavelengths to rest-frame before encoding
     ):
         """
         Args:
@@ -360,6 +361,10 @@ class MASpecFormer(L.LightningModule):
         wavelength = batch["wavelength"]  # (B, T)
         valid_mask = batch["valid_mask"]  # (B, T) bool
 
+        # Redshift correction: use rest-frame wavelengths for positional encoding
+        if self.hparams.redshift_corr:
+            wavelength = self._apply_redshift_corr(wavelength, batch)
+
         # Normalize flux per-sample
         flux_norm, mean, std = self._normalize_flux(flux, valid_mask)
 
@@ -443,6 +448,10 @@ class MASpecFormer(L.LightningModule):
         wavelength = batch["wavelength"]
         valid_mask = batch["valid_mask"]
 
+        # Redshift correction: use rest-frame wavelengths for positional encoding
+        if self.hparams.redshift_corr:
+            wavelength = self._apply_redshift_corr(wavelength, batch)
+
         # Normalize flux per-sample
         flux_norm, mean, std = self._normalize_flux(flux, valid_mask)
         target = flux_norm.clone()  # Target is normalized flux
@@ -491,6 +500,10 @@ class MASpecFormer(L.LightningModule):
         wavelength = batch["wavelength"]
         valid_mask = batch["valid_mask"]
 
+        # Redshift correction: use rest-frame wavelengths for positional encoding
+        if self.hparams.redshift_corr:
+            wavelength = self._apply_redshift_corr(wavelength, batch)
+
         # Normalize flux per-sample
         flux_norm, mean, std = self._normalize_flux(flux, valid_mask)
         target = flux_norm.clone()  # Target is normalized flux
@@ -515,6 +528,19 @@ class MASpecFormer(L.LightningModule):
 
         self.log("test_loss", loss, prog_bar=True)
         return loss
+
+    def _apply_redshift_corr(self, wavelength: Tensor, batch: dict) -> Tensor:
+        """Convert observed wavelengths to rest-frame: λ_rest = λ_obs / (1 + z).
+
+        Args:
+            wavelength: (B, T) observed wavelengths
+            batch: batch dict containing 'redshift' key with shape (B,)
+
+        Returns:
+            wavelength_rest: (B, T) rest-frame wavelengths
+        """
+        z = batch["redshift"].unsqueeze(-1)  # (B, 1)
+        return wavelength / (1.0 + z)
 
     def _normalize_flux(self, flux: Tensor, valid_mask: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """Normalize flux per-sample using valid positions only (specformer style).

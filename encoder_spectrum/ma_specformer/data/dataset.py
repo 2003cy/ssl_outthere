@@ -147,6 +147,7 @@ class JDASpectrumDataset(Dataset):
         min_sn50: Optional[float] = None,
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
+        min_redshift: Optional[float] = None,
     ):
         self.h5_path = Path(h5_path)
         if not self.h5_path.exists():
@@ -186,6 +187,15 @@ class JDASpectrumDataset(Dataset):
                 f"samples with sn50 >= {min_sn50}"
             )
 
+        if min_redshift is not None:
+            with h5py.File(self.h5_path, "r") as f:
+                z = f["z_best"][:]
+            mask &= np.isfinite(z) & (z > min_redshift)
+            print(
+                f"redshift filtering: {mask.sum()}/{total_samples} "
+                f"samples with z > {min_redshift}"
+            )
+
         self.valid_indices = np.where(mask)[0]
         self.n_samples = len(self.valid_indices)
 
@@ -206,6 +216,7 @@ class JDASpectrumDataset(Dataset):
         with h5py.File(self.h5_path, "r") as f:
             flux       = f["flux"][real_idx].astype(np.float32)
             wavelength = f["wave"][real_idx].astype(np.float32)
+            redshift   = np.float32(f["z_best"][real_idx])
 
         # Truncate to the actual spectrum length (finite wavelength pixels are
         # stored contiguously at the start; the rest is NaN padding).
@@ -221,4 +232,5 @@ class JDASpectrumDataset(Dataset):
             "flux":       torch.from_numpy(flux),
             "wavelength": torch.from_numpy(wavelength),
             "valid_mask": torch.from_numpy(valid_mask),
+            "redshift":   torch.tensor(redshift),
         }
