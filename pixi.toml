@@ -1,0 +1,109 @@
+[workspace]
+name = "ssl_outthere"
+version = "0.0.1"
+description = "Multi modal, SSL representation learning and downstream tasks for JWST NIRISS/NIRCam images and spectra"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+# ---------------------------------------------------------------------------
+# PyPI index configuration
+# ---------------------------------------------------------------------------
+[pypi-options]
+extra-index-urls = [
+    "https://download.pytorch.org/whl/cu117",
+    "https://pypi.nvidia.com",
+]
+# Allow uv to search all indexes for the best matching version instead of
+# stopping at the first index that contains a given package name.
+index-strategy = "unsafe-best-match"
+
+# ---------------------------------------------------------------------------
+# Conda dependencies
+# ---------------------------------------------------------------------------
+[dependencies]
+python      = ">=3.10,<3.12"
+pip         = ">=23.0"
+# conda-forge setuptools>=71 dropped pkg_resources; pin to a version that still ships it
+setuptools  = ">=65.0,<71.0"
+packaging   = ">=20.0,<25.0"
+fsspec      = ">=2022.5.0,<2026.0"
+numpy       = "==1.26.4"
+astropy     = ">=5.0"
+scikit-image = ">=0.19"
+scikit-learn = ">=1.0"
+pyarrow     = ">=12.0"
+pycairo     = ">=1.20"
+ipykernel   = ">=6.0"
+
+# ---------------------------------------------------------------------------
+# PyPI dependencies
+# ---------------------------------------------------------------------------
+[pypi-dependencies]
+# PyTorch (CUDA 11.7 wheels from download.pytorch.org/whl/cu117)
+torch        = "==2.0.0+cu117"
+torchvision  = "==0.15.0+cu117"
+torchmetrics = "==0.10.3"
+
+# Training framework
+lightning    = {version = "==2.3.3", extras = ["extra"]}
+
+# Data / cloud
+boto3          = ">=1.28.17"
+datasets       = ">=2.14"
+huggingface_hub = ">=0.16"
+
+# Config and utilities
+omegaconf      = ">=2.3.0"
+python-dotenv  = ">=1.0"
+jaxtyping      = ">=0.2"
+submitit       = ">=1.4"
+plotly         = ">=5.0"
+wandb          = ">=0.15"
+
+# DINOv2 runtime dependencies (dinov2 itself installed via task below)
+fvcore         = ">=0.1.5"
+iopath         = ">=0.1.9"
+
+# Probabilistic programming
+pyro-ppl       = ">=1.8"
+
+# Galaxy SED fitting
+provabgs = {git = "https://github.com/changhoonhahn/provabgs.git"}
+
+# This package itself (editable install)
+ssl_outthere = {path = ".", editable = true}
+
+# ---------------------------------------------------------------------------
+# Tasks
+# ---------------------------------------------------------------------------
+[tasks]
+# DINOv2 must be installed without its deps to avoid torch/torchvision conflicts
+install-dinov2 = "pip install --no-deps git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069"
+
+# cuml-cu11 is a pre-built wheel only available from the NVIDIA PyPI index;
+# pixi/uv cannot resolve it without attempting a source build, so we install it directly.
+install-cuml = "pip install --extra-index-url https://pypi.nvidia.com cuml-cu11"
+
+# Register the pixi env as a Jupyter kernel
+register-kernel = "python -m ipykernel install --user --name ssl_outthere --display-name 'ssl_outthere (pixi)'"
+
+# Full environment bootstrap: resolve pixi deps, then layer in extras
+bootstrap = {depends-on = ["install-dinov2", "install-cuml", "register-kernel"]}
+
+# ---------------------------------------------------------------------------
+# Dev feature
+# ---------------------------------------------------------------------------
+[feature.dev.dependencies]
+pytest  = ">=7.0"
+black   = ">=23.0"
+isort   = ">=5.0"
+
+[environments]
+default = {features = [],      solve-group = "default"}
+dev     = {features = ["dev"], solve-group = "default"}
+
+
+#pixi install               # set up the environment
+#pixi run bootstrap         # install dinov2 (--no-deps) + cuml-cu11
+#pixi run -e dev pytest     # run tests in dev environment
+#pixi run register-kernel   # register the pixi env as a Jupyter kernel
