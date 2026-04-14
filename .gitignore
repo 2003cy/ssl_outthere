@@ -41,3 +41,4 @@ settings.json
 sync.sh
 .claude/*
 .pixi/*
+pixi.lock
