@@ -4,7 +4,7 @@ Workflow
 --------
 1. Run each frozen encoder offline to produce a single HDF5 file::
 
-       with h5py.File("embeddings/jda/embeddings.h5", "w") as f:
+       with h5py.File("embeddings/dja/embeddings.h5", "w") as f:
            f.create_dataset("image_embed",    data=image_cls)    # (N, D_img)
            f.create_dataset("spectrum_embed", data=spectrum_cls)  # (N, D_spec)
 
@@ -13,7 +13,7 @@ Workflow
 2. Pass the path + key mapping to FusionEmbeddingDataset::
 
        dataset = FusionEmbeddingDataset(
-           h5_path="embeddings/jda/embeddings.h5",
+           h5_path="embeddings/dja/embeddings.h5",
            modality_keys={"image": "image_embed", "spectrum": "spectrum_embed"},
        )
 

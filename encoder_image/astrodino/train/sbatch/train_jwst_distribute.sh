@@ -1,31 +1,29 @@
 #!/bin/bash -l
-#SBATCH -t 06:00:00
-#SBATCH --nodes=4
-#SBATCH --constraint="gpu"   #   providing GPUs.
-#SBATCH --gres=gpu:a100:4    # Request 4 GPUs per node.
-#SBATCH --tasks-per-node=4  #   running 4 tasks per node, each with 1 GPU.
-#SBATCH --cpus-per-task=18   #   using 18 cores each.
+#SBATCH -t 24:00:00
+#SBATCH --nodes=2
+#SBATCH --constraint="gpu"
+#SBATCH --gres=gpu:a100:4        # 4 GPUs per node
+#SBATCH --tasks-per-node=4       # 1 task per GPU
+#SBATCH --cpus-per-task=18
 #SBATCH --mem=500000
-#SBATCH --output=/ptmp/yacheng/outthere_ssl/train_test-%j.log
-
+#SBATCH --output=/u/yacheng/projects/ssl_outthere/train_dist-%j.log
 #SBATCH --mail-type=none
 #SBATCH --mail-user=yacheng@mpia.de
 
 module purge
-module load anaconda/3/2023.03
 module load cuda/12.6
-#module load gcc
 
-run_name="astrodino_f115w_vitl_distribute"
-config="/ptmp/yacheng/outthere_ssl/AstroCLIP/configs/astrodino_jwst_vitl.yaml"
+run_name="astrodino_f150w_vitb_ps6_st3_bs128_distribute"
+group_name="distribute"
+config="/u/yacheng/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_f150w_vitb_ps6_st3_bs128.yaml"
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-source /mpcdf/soft/SLE_15/packages/x86_64/anaconda/3/2023.03/etc/profile.d/conda.sh
+PYTHON=/u/yacheng/ssl_outthere/.pixi/envs/default/bin/python
 
-conda activate astrodino
+cd /u/yacheng/ssl_outthere/encoder_image/astrodino/train
 
-cd /ptmp/yacheng/outthere_ssl/AstroCLIP
-
-srun python -m astroclip.astrodino.trainer \
-    --config-file=$config --run-name=$run_name
+srun $PYTHON -m trainer \
+    --config-file="$config" \
+    --run-name="$run_name" \
+    --group-name="$group_name"

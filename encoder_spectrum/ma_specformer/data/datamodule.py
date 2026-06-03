@@ -7,7 +7,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader, random_split, Sampler
 
-from .dataset import MASpectrumDataset, JDASpectrumDataset
+from .dataset import MASpectrumDataset, DJASpectrumDataset
 
 
 class InfiniteLoopSampler(Sampler):
@@ -140,11 +140,11 @@ class MASpectrumDataModule(L.LightningDataModule):
         return collated
 
 
-class JDASpectrumDataModule(L.LightningDataModule):
-    """DataModule for JDA spectrum data (jda_spectra.h5).
+class DJASpectrumDataModule(L.LightningDataModule):
+    """DataModule for DJA spectrum data (dja_spectra.h5).
 
     Args:
-        h5_path:              Path to the JDA HDF5 file.
+        h5_path:              Path to the DJA HDF5 file.
         batch_size:           Batch size for training/validation.
         num_workers:          Number of DataLoader workers.
         train_val_split:      Fraction of data used for training.
@@ -176,7 +176,7 @@ class JDASpectrumDataModule(L.LightningDataModule):
 
     def setup(self, stage: str = None) -> None:
         if self.dataset is None:
-            self.dataset = JDASpectrumDataset(
+            self.dataset = DJASpectrumDataset(
                 self.hparams.h5_path,
                 min_sn50=self.hparams.min_sn50,
                 min_length=self.hparams.min_length,
@@ -196,7 +196,7 @@ class JDASpectrumDataModule(L.LightningDataModule):
     def _pad_collate(batch: List[dict]) -> dict:
         """Pad variable-length spectra to the longest in the batch.
 
-        JDA spectra are truncated to their actual finite-pixel length, so
+        DJA spectra are truncated to their actual finite-pixel length, so
         different samples may have different shapes.  We pad with zeros and
         extend valid_mask with False so padded positions are invisible to
         both attention and loss computation.

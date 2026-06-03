@@ -114,8 +114,8 @@ class MetricsSaveCallback(L.Callback):
 class WarmupCosineLR(L.Callback):
     """Linear warmup + cosine annealing LR scheduler."""
 
-    def __init__(self, warmup_steps: int = 1000, base_lr: float = 5e-5, 
-                 min_lr: float = 1e-6, total_steps: Optional[int] = None):
+    def __init__(self, warmup_steps: int = 1000, base_lr: Optional[float] = None,
+                 min_lr: Optional[float] = None, total_steps: Optional[int] = None):
         super().__init__()
         self.warmup_steps = warmup_steps
         self.base_lr = base_lr
@@ -123,8 +123,14 @@ class WarmupCosineLR(L.Callback):
         self.total_steps = total_steps
 
     def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
+        # Fall back to optimizer initial lr when base_lr is not set explicitly —
+        # this lets HPO pass lr via --optimizer.init_args.lr without touching callbacks.
+        if self.base_lr is None:
+            self.base_lr = trainer.optimizers[0].param_groups[0]["lr"]
+        if self.min_lr is None:
+            self.min_lr = self.base_lr * 0.1
         if self.total_steps is None:
-            self.total_steps = (trainer.max_steps if trainer.max_steps > 0 
+            self.total_steps = (trainer.max_steps if trainer.max_steps > 0
                                else trainer.max_epochs * len(trainer.train_dataloader))
 
     def on_train_batch_start(self, trainer: L.Trainer, pl_module: L.LightningModule, 

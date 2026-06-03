@@ -10,7 +10,6 @@ platforms = ["linux-64"]
 # ---------------------------------------------------------------------------
 [pypi-options]
 extra-index-urls = [
-    "https://download.pytorch.org/whl/cu117",
     "https://pypi.nvidia.com",
 ]
 # Allow uv to search all indexes for the best matching version instead of
@@ -28,20 +27,26 @@ setuptools  = ">=65.0,<71.0"
 packaging   = ">=20.0,<25.0"
 fsspec      = ">=2022.5.0,<2026.0"
 numpy       = "==1.26.4"
+scipy       = ">=1.10"
 astropy     = ">=5.0"
 scikit-image = ">=0.19"
 scikit-learn = ">=1.0"
 pyarrow     = ">=12.0"
 pycairo     = ">=1.20"
 ipykernel   = ">=6.0"
+libstdcxx-ng = ">=15.2.0,<16"
+wandb = ">=0.26.1,<0.27"
 
 # ---------------------------------------------------------------------------
-# PyPI dependencies
+# Activation — prepend pixi env lib so newer libstdc++ shadows the system one
+# ---------------------------------------------------------------------------
+[activation]
+env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH" }
+
+# ---------------------------------------------------------------------------
+# PyPI dependencies (shared, CUDA-version-agnostic)
 # ---------------------------------------------------------------------------
 [pypi-dependencies]
-# PyTorch (CUDA 11.7 wheels from download.pytorch.org/whl/cu117)
-torch        = "==2.0.0+cu117"
-torchvision  = "==0.15.0+cu117"
 torchmetrics = "==0.10.3"
 
 # Training framework
@@ -60,15 +65,17 @@ submitit       = ">=1.4"
 plotly         = ">=5.0"
 wandb          = ">=0.15"
 
-# DINOv2 runtime dependencies (dinov2 itself installed via task below)
-fvcore         = ">=0.1.5"
-iopath         = ">=0.1.9"
-
 # Probabilistic programming
 pyro-ppl       = ">=1.8"
 
 # Galaxy SED fitting
 provabgs = {git = "https://github.com/changhoonhahn/provabgs.git"}
+
+#optuna for hyperparameter tunning
+optuna = ">=3.0"
+
+#shap for model interpretability
+shap = ">=0.41.0"
 
 # This package itself (editable install)
 ssl_outthere = {path = ".", editable = true}
@@ -80,6 +87,9 @@ ssl_outthere = {path = ".", editable = true}
 # DINOv2 must be installed without its deps to avoid torch/torchvision conflicts
 install-dinov2 = "pip install --no-deps git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069"
 
+# Apply project-specific patches to the installed dinov2 (idempotent)
+patch-dinov2 = {cmd = "python encoder_image/astrodino/patch_dinov2.py", depends-on = ["install-dinov2"]}
+
 # cuml-cu11 is a pre-built wheel only available from the NVIDIA PyPI index;
 # pixi/uv cannot resolve it without attempting a source build, so we install it directly.
 install-cuml = "pip install --extra-index-url https://pypi.nvidia.com cuml-cu11"
@@ -88,7 +98,58 @@ install-cuml = "pip install --extra-index-url https://pypi.nvidia.com cuml-cu11"
 register-kernel = "python -m ipykernel install --user --name ssl_outthere --display-name 'ssl_outthere (pixi)'"
 
 # Full environment bootstrap: resolve pixi deps, then layer in extras
-bootstrap = {depends-on = ["install-dinov2", "install-cuml", "register-kernel"]}
+bootstrap = {depends-on = ["patch-dinov2", "register-kernel"]}
+#"install-cuml",
+
+# ---------------------------------------------------------------------------
+# cu117 feature — image encoder / dinov2 (default + dev environments)
+# ---------------------------------------------------------------------------
+[feature.cu117.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu117"]
+
+[feature.cu117.pypi-dependencies]
+torch       = "==2.0.1+cu117"
+torchvision = "==0.15.2+cu117"
+# DINOv2 runtime dependencies
+fvcore      = ">=0.1.5"
+iopath      = ">=0.1.9"
+xformers    = "==0.0.20"
+
+# ---------------------------------------------------------------------------
+# H100 feature — cu118 for sm_90 support, includes dinov2 deps
+# ---------------------------------------------------------------------------
+[feature.h100.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu118"]
+
+[feature.h100.dependencies]
+python        = ">=3.10,<3.12"
+numpy         = "==1.26.4"
+scipy         = ">=1.10"
+ipykernel     = ">=6.0"
+libstdcxx-ng  = ">=15.2.0,<16"
+
+[feature.h100.pypi-dependencies]
+torch         = "==2.0.1+cu118"
+torchvision   = "==0.15.2+cu118"
+matplotlib    = ">=3.5"
+h5py          = ">=3.0"
+# DINOv2 runtime dependencies (cu118 build of xformers matches torch 2.0.1+cu118)
+fvcore        = ">=0.1.5"
+iopath        = ">=0.1.9"
+xformers      = "==0.0.20"
+
+[feature.h100.tasks]
+# DINOv2 must be installed without its deps to avoid torch/torchvision conflicts
+install-dinov2 = "pip install --no-deps git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069"
+
+# Apply project-specific patches to the installed dinov2 (idempotent)
+patch-dinov2 = {cmd = "python encoder_image/astrodino/patch_dinov2.py", depends-on = ["install-dinov2"]}
+
+# Register the h100 pixi env as a Jupyter kernel (run via `pixi run -e h100 register-kernel`)
+register-kernel = "python -m ipykernel install --user --name ssl_h100 --display-name 'ssl_outthere h100 (pixi)'"
+
+# Full h100 environment bootstrap
+bootstrap = {depends-on = ["patch-dinov2", "register-kernel"]}
 
 # ---------------------------------------------------------------------------
 # Dev feature
@@ -99,11 +160,13 @@ black   = ">=23.0"
 isort   = ">=5.0"
 
 [environments]
-default = {features = [],      solve-group = "default"}
-dev     = {features = ["dev"], solve-group = "default"}
+default = {features = ["cu117"],       solve-group = "default"}
+dev     = {features = ["cu117", "dev"], solve-group = "default"}
+h100    = {features = ["h100"],         solve-group = "h100"}
 
 
 #pixi install               # set up the environment
 #pixi run bootstrap         # install dinov2 (--no-deps) + cuml-cu11
 #pixi run -e dev pytest     # run tests in dev environment
-#pixi run register-kernel   # register the pixi env as a Jupyter kernel
+#pixi run register-kernel             # register the default pixi env as a Jupyter kernel
+#pixi run -e h100 register-kernel     # register the h100 pixi env as a Jupyter kernel

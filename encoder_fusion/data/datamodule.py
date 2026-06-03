@@ -40,7 +40,7 @@ class FusionDataModule(L.LightningDataModule):
                            FusionEmbeddingDataset for details.
         min_sn50:          Exclude samples with ``sn50 < min_sn50`` (requires
                            an ``sn50`` dataset in the H5 file, e.g. saved by
-                           extract_embeddings_jda.py).  0.0 = no filter.
+                           extract_embeddings_dja.py).  0.0 = no filter.
                            Analogous to encoder_spectrum's ``min_sn50``.
         min_n_valid:       Exclude samples with fewer than this many valid
                            spectral pixels (requires ``n_valid`` in H5).

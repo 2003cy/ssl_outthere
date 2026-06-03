@@ -11,23 +11,19 @@
 #SBATCH --mail-user=yacheng@mpia.de
 
 module purge
-module load anaconda/3/2023.03
 module load cuda/12.6
-#module load gcc
 
-#run_name="astrodino_f150w_vitb_dev"
-#config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vitb_f150w.yaml"
-
-run_name="astrodino_f150w_vitb_ps6_bs128"
-config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_f150w_vitb_ps6_bs128.yaml"
+run_name="astrodino_f150w_vitb_ps6_st3_bs128"
+group_name="single"
+config="/u/yacheng/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_f150w_vitb_ps6_st3_bs128.yaml"
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-source /mpcdf/soft/SLE_15/packages/x86_64/anaconda/3/2023.03/etc/profile.d/conda.sh
+PYTHON=/u/yacheng/ssl_outthere/.pixi/envs/default/bin/python
 
-conda activate astrodino
+cd /u/yacheng/ssl_outthere/encoder_image/astrodino/train
 
-cd /u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train
-
-srun python -m trainer \
-    --config-file=$config --run-name=$run_name
+srun $PYTHON -m trainer \
+    --config-file="$config" \
+    --run-name="$run_name" \
+    --group-name="$group_name"

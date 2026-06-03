@@ -1,0 +1,38 @@
+# Baseline config for Optuna sweeps. All keys are starting values; the search
+# space in optuna_train.py overrides the ones being tuned. Keys NOT in the
+# search space are held fixed at the values here.
+
+model:
+  embed_dim: 128
+  num_layers: 8
+  num_heads: 4
+  mlp_ratio: 4.0
+  dropout: 0.1
+  patch_size: 4
+  stride: 2
+  patch_invalid_threshold: 0.25
+  mask_ratio: 0.5
+  min_unmasked: 4
+  max_line_blocks: 1
+  line_prominence: 1.2
+  min_std: 0.1
+  decoder_hidden_dims: [256]
+  line_loss_weight: 4.0
+  lr: 3.0e-4
+  weight_decay: 0.004
+  betas: [0.9, 0.95]
+  warmup_steps: 300
+  min_lr: 1.0e-5
+
+data:
+  fits_path: /home/yacheng/ssl_outthere/images/DJA/DJA_spectra_v4.5.fits
+  batch_size: 512
+  num_workers: 2          # lower than baseline — multi-proc workers share CPU
+  train_val_split: 0.9
+  use_infinite_sampler: true
+  grades: [1, 2, 3]
+  min_obs_frac: 0.5
+  min_sn50: 3.0
+  min_redshift: 0.0
+  wl_ref_min: 1.0
+  wl_ref_max: 2.0

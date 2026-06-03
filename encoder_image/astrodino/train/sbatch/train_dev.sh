@@ -1,36 +1,30 @@
 #!/bin/bash -l
-#SBATCH -t 00:05:00
+#SBATCH -t 00:10:00
 #SBATCH --nodes=1
-#SBATCH --partition=gpudev  # Use the GPU development partition
-#SBATCH --constraint="gpu"   #   providing GPUs.
-#SBATCH --gres=gpu:a100:4    # Request 4 GPUs per node.
-#SBATCH --tasks-per-node=4  #   running 4 tasks per node, each with 1 GPU.
-#SBATCH --cpus-per-task=18   #   using 18 cores each.
+#SBATCH --partition=gpudev
+#SBATCH --constraint="gpu"
+#SBATCH --gres=gpu:a100:4
+#SBATCH --tasks-per-node=4
+#SBATCH --cpus-per-task=18
 #SBATCH --mem=500000
-#SBATCH --output=/u/yacheng/projects/ssl_outthere/train_test-%j.log
-
+#SBATCH --output=/u/yacheng/ssl_outthere/train_test-%j.log
 #SBATCH --mail-type=none
 #SBATCH --mail-user=yacheng@mpia.de
 
 module purge
-module load anaconda/3/2023.03
 module load cuda/12.6
-#module load gcc
 
-#run_name="astrodino_f150w_vitb_dev"
-#config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_jwst_vitb_f150w.yaml"
-
-run_name="astrodino_f150w_vitb_ps6_bs128_dev"
-config="/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_f150w_vitb_ps6_bs128.yaml"
-
+run_name="astrodino_f150w_vitb_ps6_st3_bs128_dev"
+group_name="dev"
+config="/u/yacheng/ssl_outthere/encoder_image/astrodino/train/configs/astrodino_f150w_vitb_ps6_st3_bs128.yaml"
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-source /mpcdf/soft/SLE_15/packages/x86_64/anaconda/3/2023.03/etc/profile.d/conda.sh
+PYTHON=/u/yacheng/ssl_outthere/.pixi/envs/default/bin/python
 
-conda activate astrodino
+cd /u/yacheng/ssl_outthere/encoder_image/astrodino/train
 
-cd /u/yacheng/projects/ssl_outthere/encoder_image/astrodino/train
-
-srun python -m trainer \
-    --config-file=$config --run-name=$run_name
+srun $PYTHON -m trainer \
+    --config-file="$config" \
+    --run-name="$run_name" \
+    --group-name="$group_name"

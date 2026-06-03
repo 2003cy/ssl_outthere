@@ -118,8 +118,8 @@ class MASpectrumDataset(Dataset):
         }
 
 
-class JDASpectrumDataset(Dataset):
-    """JDA spectrum dataset from a single HDF5 file produced by export_jda_spectrum.py.
+class DJASpectrumDataset(Dataset):
+    """DJA spectrum dataset from a single HDF5 file produced by export_dja_spectrum.py.
 
     The HDF5 file is expected to contain:
         wave             float32  (N, L)  wavelength in microns
@@ -136,7 +136,7 @@ class JDASpectrumDataset(Dataset):
     Each sample returns the same (flux, wavelength, valid_mask) dict as MASpectrumDataset.
 
     Args:
-        h5_path:  Path to the JDA HDF5 file.
+        h5_path:  Path to the DJA HDF5 file.
         min_sn50: Minimum sn50 threshold; samples below it are excluded.
                   Default: None (no filtering).
     """

@@ -9,37 +9,11 @@ Project-URL: Repository, https://github.com/2003cy/ssl_outthere
 Project-URL: Bug Tracker, https://github.com/2003cy/ssl_outthere/issues
 Keywords: astronomy,machine-learning,self-supervised,jwst,image,galaxy,galaxy evolution,spectroscopy
 Classifier: Programming Language :: Python :: 3
-Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.10
 Classifier: Operating System :: OS Independent
-Requires-Python: >=3.8
+Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: astropy
-Requires-Dist: datasets
-Requires-Dist: torch==2.0.0
-Requires-Dist: torchvision>=0.15.0
-Requires-Dist: omegaconf>=2.3.0
-Requires-Dist: torchmetrics>=0.10.3
-Requires-Dist: fvcore
-Requires-Dist: iopath
-Requires-Dist: xformers==0.0.18
-Requires-Dist: submitit
-Requires-Dist: huggingface_hub
-Requires-Dist: jaxtyping
-Requires-Dist: lightning[extra]
-Requires-Dist: plotly
-Requires-Dist: provabgs @ git+https://github.com/changhoonhahn/provabgs.git
-Requires-Dist: pycairo
-Requires-Dist: pyro-ppl
-Requires-Dist: python-dotenv
-Requires-Dist: scikit-image
-Requires-Dist: scikit-learn
-Requires-Dist: wandb
-Requires-Dist: ipykernel
-Provides-Extra: dev
-Requires-Dist: pytest; extra == "dev"
-Requires-Dist: black; extra == "dev"
-Requires-Dist: isort; extra == "dev"
 Dynamic: license-file
 
 # Multi-Modal SSL Outthere

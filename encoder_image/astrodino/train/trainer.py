@@ -14,7 +14,6 @@ from dinov2 import distributed as distributed
 from dinov2.data import (
     #DataAugmentationDINO,     ;; replaced with astro dino augmentations
     MaskingGenerator,
-    SamplerType,
     collate_data_and_cast,
 )
 from dinov2.fsdp import FSDPCheckpointer
@@ -25,7 +24,7 @@ from fvcore.common.checkpoint import PeriodicCheckpointer
 from omegaconf import OmegaConf
 
 from data.augmentations import DataAugmentationAstroDINO
-from data.loaders import make_data_loader, make_dataset
+from data.loaders import SamplerType, make_data_loader, make_dataset
 from utils import MetricLogger
 #from astroclip.env import format_with_env
 
@@ -34,8 +33,8 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 logger = logging.getLogger("dinov2")
 
-OUTPUT_PATH = "/u/yacheng/projects/ssl_outthere/encoder_image/astrodino/model"     #was format_with_env("{ASTROCLIP_ROOT}")
-WANDB_ENTITY_NAME = "yacheng"         #was format_with_env("{WANDB_ENTITY_NAME}")
+OUTPUT_PATH = "/u/yacheng/ssl_outthere/encoder_image/astrodino/model"
+WANDB_ENTITY_NAME = "yacheng"
 
 
 def get_args_parser(add_help: bool = True):
@@ -199,10 +198,11 @@ def do_train(cfg, model, run_name, group_name, resume=False):
 
     img_size = cfg.crops.global_crops_size
     patch_size = cfg.student.patch_size
-    n_tokens = (img_size // patch_size) ** 2
+    patch_stride = cfg.student.get('patch_stride', patch_size)
+    n_tokens = ((img_size - patch_size) // patch_stride + 1) ** 2
     mask_generator = MaskingGenerator(
-        input_size=(img_size // patch_size, img_size // patch_size),
-        max_num_patches=0.5 * img_size // patch_size * img_size // patch_size,
+        input_size=((img_size - patch_size) // patch_stride + 1,) * 2,
+        max_num_patches=0.5 * n_tokens,
     )
 
     # Apply custom data augmentations for astro
@@ -230,16 +230,14 @@ def do_train(cfg, model, run_name, group_name, resume=False):
         re_min_pix=cfg.train.get("re_min_pix", None),
         re_max_pix=cfg.train.get("re_max_pix", None),
     )
-    # sampler_type = SamplerType.INFINITE
-    sampler_type = SamplerType.SHARDED_INFINITE
     data_loader = make_data_loader(
         dataset=dataset,
         batch_size=cfg.train.batch_size_per_gpu,
         num_workers=cfg.train.num_workers,
         shuffle=True,
-        seed=cfg.train.seed, #start_iter,  # TODO: Fix this -- cfg.train.seed
-        #sampler_type=sampler_type,
-        sampler_advance= start_iter * cfg.train.batch_size_per_gpu,  #0; TODO(qas): fix this -- start_iter * cfg.train.batch_size_per_gpu,
+        seed=cfg.train.seed,
+        sampler_type=SamplerType.SHARDED_INFINITE,
+        sampler_advance=start_iter * cfg.train.batch_size_per_gpu,
         drop_last=True,
         collate_fn=collate_fn,
         

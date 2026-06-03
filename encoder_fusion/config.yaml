@@ -19,7 +19,7 @@ model:
       input_dim: null     # auto-detected from image.npy (astrodino_f150w_vitb_ps6_bs128 → 512)
       hidden_dim: 128
     spectrum:
-      input_dim: null     # auto-detected from spectrum.npy (jda_prism_f100lp → 128)
+      input_dim: null     # auto-detected from spectrum.npy (dja_prism_f100lp → 128)
       hidden_dim: 64
   # Future modalities — add here and re-run (no code changes needed):
   # morphology:

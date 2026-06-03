@@ -2,9 +2,11 @@
 __pycache__/
 .DS_Store
 .vscode/
+paper/
 AstroCLIP
 A_ssl-legacysurvey/
 encoder_spectrum/ma_specformer/outputs
+encoder_spectrum/LoqResPT/outputs
 encoder_image/astrodino/model
 encoder_fusion/outputs
 !encoder_image/astrodino/model/check_train_metric.ipynb

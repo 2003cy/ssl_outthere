@@ -67,6 +67,7 @@ class DinoVisionTransformer(nn.Module):
         interpolate_antialias=False,
         interpolate_offset=0.1,
         channel_adaptive=False,
+        patch_stride=None,
     ):
         """
         Args:
@@ -101,12 +102,13 @@ class DinoVisionTransformer(nn.Module):
         self.n_blocks = depth
         self.num_heads = num_heads
         self.patch_size = patch_size
+        self.patch_stride = patch_stride if patch_stride is not None else patch_size
         self.num_register_tokens = num_register_tokens
         self.interpolate_antialias = interpolate_antialias
         self.interpolate_offset = interpolate_offset
         self.bag_of_channels = channel_adaptive
 
-        self.patch_embed = embed_layer(img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
+        self.patch_embed = embed_layer(img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, stride=patch_stride)
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -189,8 +191,8 @@ class DinoVisionTransformer(nn.Module):
         class_pos_embed = pos_embed[:, 0]
         patch_pos_embed = pos_embed[:, 1:]
         dim = x.shape[-1]
-        w0 = w // self.patch_size
-        h0 = h // self.patch_size
+        w0 = (w - self.patch_size) // self.patch_stride + 1
+        h0 = (h - self.patch_size) // self.patch_stride + 1
         M = int(math.sqrt(N))  # Recover the number of patches in each dimension
         assert N == M * M
         kwargs = {}
@@ -322,7 +324,7 @@ class DinoVisionTransformer(nn.Module):
         if reshape:
             B, _, w, h = x.shape
             outputs = [
-                out.reshape(B, w // self.patch_size, h // self.patch_size, -1).permute(0, 3, 1, 2).contiguous()
+                out.reshape(B, (w - self.patch_size) // self.patch_stride + 1, (h - self.patch_size) // self.patch_stride + 1, -1).permute(0, 3, 1, 2).contiguous()
                 for out in outputs
             ]
 

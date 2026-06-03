@@ -7,36 +7,15 @@ name = "ssl_outthere"
 version = "0.0.1"
 description = "Multi modal, SSL representation learning and downstream tasks for JWST NIRISS/NIRCam images and spectra"
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [ { name = "Yang Cheng", email = "yacheng@mpia.de" } ]
 license = "MIT"
-dependencies = [
-    "astropy",
-    "datasets",
-    "torch==2.0.0",
-    "torchvision>=0.15.0",
-    "omegaconf>=2.3.0",
-    "torchmetrics>=0.10.3",
-    "fvcore",
-    "iopath",
-    "xformers==0.0.18",
-    "submitit",
-    "huggingface_hub",
-    "jaxtyping",
-    "lightning[extra]",
-    "plotly",
-    "provabgs @ git+https://github.com/changhoonhahn/provabgs.git",
-    "pycairo",
-    "pyro-ppl",
-    "python-dotenv",
-    "scikit-image",
-    "scikit-learn",
-    "wandb",
-    "ipykernel"
-]
+# Dependencies are managed by pixi (pixi.toml). Keep this list empty so that
+# a bare `pip install -e .` inside the pixi env does not pull duplicate wheels.
+dependencies = []
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.10",
     "Operating System :: OS Independent",
 ]
 
@@ -52,6 +31,3 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["images", "outputs", "notebooks", "data"]
-
-[project.optional-dependencies]
-dev = ["pytest", "black", "isort"]
