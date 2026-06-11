@@ -1,7 +1,7 @@
 """LightningDataModule for multimodal fusion training."""
 
 import warnings
-from typing import Optional
+from typing import Optional, Union
 
 import h5py
 import numpy as np
@@ -48,12 +48,18 @@ class FusionDataModule(L.LightningDataModule):
         max_n_valid:       Exclude samples with more than this many valid
                            spectral pixels.  999999 = no upper limit.
                            Analogous to encoder_spectrum's ``max_length``.
+        frac_valid_pix:    Keep only samples whose fraction of valid tokens
+                           (mean over the token axis of each ``token_mask_keys``
+                           mask) is strictly greater than this.  0.0 = no filter.
+                           Mirrors encoder_spectrum/LowResPT's ``frac_valid_pix``
+                           (which thresholds ``valid.mean(axis=1)``) and drops the
+                           near-empty spectra that otherwise pool to a zero vector.
     """
 
     def __init__(
         self,
         h5_path: str,
-        modality_keys: dict[str, str],
+        modality_keys: dict[str, Union[str, list[str]]],
         batch_size: int = 256,
         num_workers: int = 4,
         train_val_split: float = 0.9,
@@ -61,6 +67,9 @@ class FusionDataModule(L.LightningDataModule):
         min_sn50: float = 0.0,
         min_n_valid: int = 0,
         max_n_valid: int = 999999,
+        frac_valid_pix: float = 0.0,
+        token_mask_keys: Optional[dict[str, str]] = None,
+        stats_keys: Optional[dict[str, str]] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -74,9 +83,28 @@ class FusionDataModule(L.LightningDataModule):
         Available before setup() is called — safe to use in model.setup().
         """
         with h5py.File(self.hparams.h5_path, "r") as f:
+            def _feat(key):
+                # str → that key; list → first key (members share the feature dim).
+                k = key if isinstance(key, str) else key[0]
+                return f[k].shape[-1]
             return {
-                name: f[key].shape[1]
+                name: _feat(key)
                 for name, key in self.hparams.modality_keys.items()
+            }
+
+    @property
+    def stats_dims(self) -> dict[str, int]:
+        """{modality: side-feature width} from the stats_keys datasets.
+
+        A 1-D stats dataset (N,) counts as width 1. Available before setup().
+        """
+        stats_keys = self.hparams.stats_keys or {}
+        if not stats_keys:
+            return {}
+        with h5py.File(self.hparams.h5_path, "r") as f:
+            return {
+                name: (1 if f[key].ndim == 1 else f[key].shape[-1])
+                for name, key in stats_keys.items()
             }
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -85,6 +113,9 @@ class FusionDataModule(L.LightningDataModule):
 
         with h5py.File(self.hparams.h5_path, "r") as f:
             first_key = next(iter(self.hparams.modality_keys.values()))
+            # value may be a str or a list of keys (members share the row count)
+            if not isinstance(first_key, str):
+                first_key = first_key[0]
             n_total = f[first_key].shape[0]
 
             # ── Data selection (mirrors encoder_spectrum min_sn50 / min_length) ──
@@ -109,6 +140,20 @@ class FusionDataModule(L.LightningDataModule):
                         f"{self.hparams.h5_path} — filter skipped."
                     )
 
+            # Window-coverage cut (mirrors LowResPT's frac_valid_pix): keep only
+            # samples whose fraction of valid tokens exceeds the threshold. Drops
+            # near-empty spectra that pool to a degenerate (zero) embedding.
+            if self.hparams.frac_valid_pix > 0.0:
+                mask_keys = self.hparams.token_mask_keys or {}
+                if not mask_keys:
+                    warnings.warn(
+                        f"frac_valid_pix={self.hparams.frac_valid_pix} requested but "
+                        f"no token_mask_keys configured — filter skipped."
+                    )
+                for name, mkey in mask_keys.items():
+                    valid_frac = f[mkey][:].mean(axis=1)        # (N,) in [0, 1]
+                    selection &= valid_frac > self.hparams.frac_valid_pix
+
         indices = np.where(selection)[0]
         n_kept = len(indices)
         if n_kept < n_total:
@@ -124,12 +169,16 @@ class FusionDataModule(L.LightningDataModule):
             modality_keys=self.hparams.modality_keys,
             indices=indices[:n_train],
             modality_mask_prob=self.hparams.modality_mask_prob,
+            token_mask_keys=self.hparams.token_mask_keys,
+            stats_keys=self.hparams.stats_keys,
         )
         self.val_dataset = FusionEmbeddingDataset(
             h5_path=self.hparams.h5_path,
             modality_keys=self.hparams.modality_keys,
             indices=indices[n_train:],
             modality_mask_prob=0.0,  # no masking during validation
+            token_mask_keys=self.hparams.token_mask_keys,
+            stats_keys=self.hparams.stats_keys,
         )
 
     def train_dataloader(self) -> DataLoader:

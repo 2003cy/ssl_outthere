@@ -1,172 +1,58 @@
-"""Training callbacks for encoder_fusion (WarmupCosineLR, RunManager, MetricsSaveCallback).
+"""Training callbacks for encoder_fusion (EpochPrinter).
 
-Adapted from encoder_spectrum/ma_specformer/model/callbacks.py.
+LR scheduling (warmup + cosine) lives in MultimodalFusionModule.configure_optimizers
+(single definition, mirroring encoder_spectrum/LowResPT) — there is no LR callback.
+
+Run artifacts (metrics.csv, hparams.yaml, checkpoints/) follow the standard
+Lightning CSVLogger convention used by encoder_spectrum/LowResPT: configure a
+CSVLogger with ``save_dir`` + ``name`` and Lightning writes everything under
+``<save_dir>/<name>/version_N/``. ModelCheckpoint with no explicit ``dirpath``
+nests its ``checkpoints/`` in that same version directory.
 """
 
-import json
-import math
-import shutil
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Optional
-
-import lightning as L
+from lightning.pytorch.callbacks import Callback
 
 
-class WarmupCosineLR(L.Callback):
-    """Linear warmup followed by cosine annealing learning rate schedule.
+class EpochPrinter(Callback):
+    """Print one plain line per epoch instead of a live progress bar.
 
-    Applied as a callback so it works alongside LightningCLI without a
-    separate lr_scheduler config entry.
+    tqdm / RichProgressBar redraw in place via ANSI cursor codes. When training
+    is launched as a subprocess (`!python trainer.py ...` in a notebook), stdout
+    is a pipe and the notebook's output renderer does NOT honor those codes, so
+    every refresh piles up instead of overwriting. A plain `print` with a newline
+    needs no cursor control, so it renders cleanly in that exact setting.
+
+    Pair with ``trainer.enable_progress_bar: false`` in the config.
     """
 
-    def __init__(
-        self,
-        warmup_steps: int = 200,
-        base_lr: float = 1e-4,
-        min_lr: float = 1e-6,
-        total_steps: Optional[int] = None,
-    ):
-        super().__init__()
-        self.warmup_steps = warmup_steps
-        self.base_lr = base_lr
-        self.min_lr = min_lr
-        self.total_steps = total_steps
-
-    def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
-        if self.total_steps is None:
-            self.total_steps = (
-                trainer.max_steps
-                if trainer.max_steps > 0
-                else trainer.max_epochs * len(trainer.train_dataloader)
-            )
-
-    def on_train_batch_start(
-        self,
-        trainer: L.Trainer,
-        pl_module: L.LightningModule,
-        batch: Any,
-        batch_idx: int,
-    ) -> None:
-        step = trainer.global_step
-        if step < self.warmup_steps:
-            lr = self.base_lr * (step + 1) / self.warmup_steps
-        else:
-            progress = min(
-                (step - self.warmup_steps) / max(self.total_steps - self.warmup_steps, 1),
-                1.0,
-            )
-            lr = self.min_lr + (self.base_lr - self.min_lr) * (1 + math.cos(math.pi * progress)) / 2
-
-        for pg in trainer.optimizers[0].param_groups:
-            pg["lr"] = lr
-        pl_module.log("lr", lr, prog_bar=True, on_step=True)
-
-
-class RunManager(L.Callback):
-    """Create a timestamped run directory, copy config, and redirect checkpoints into it."""
-
-    def __init__(
-        self,
-        run_name: str = "run",
-        base_dir: str = "./outputs",
-        config_path: Optional[str] = None,
-    ):
-        super().__init__()
-        self.run_name = run_name
-        self.base_dir = Path(base_dir)
-        self.config_path = Path(config_path) if config_path else None
-        self.run_dir: Optional[Path] = None
-
     @staticmethod
-    def _detect_config_from_argv() -> Optional[Path]:
-        import sys
-        args = sys.argv
-        for i, arg in enumerate(args):
-            if arg in ("--config", "-c") and i + 1 < len(args):
-                return Path(args[i + 1])
-            if arg.startswith("--config="):
-                return Path(arg.split("=", 1)[1])
-        for arg in args:
-            if arg.endswith(".yaml") and Path(arg).exists():
-                return Path(arg)
-        return None
+    def _fmt(metrics, key, nd=4):
+        v = metrics.get(key)
+        if v is None:
+            return "  n/a "
+        try:
+            return f"{v.item():.{nd}f}"
+        except AttributeError:
+            return f"{float(v):.{nd}f}"
 
-    def setup(self, trainer: L.Trainer, pl_module: L.LightningModule, stage: str) -> None:
-        if stage != "fit" or self.run_dir is not None:
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if trainer.sanity_checking:
             return
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_dir = self.base_dir / f"{self.run_name}_{timestamp}"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-
-        config_to_copy = self.config_path
-        if config_to_copy is None or not config_to_copy.exists():
-            config_to_copy = self._detect_config_from_argv()
-        if config_to_copy and config_to_copy.exists():
-            shutil.copy(config_to_copy, self.run_dir / "config.yaml")
-            print(f"Config saved: {self.run_dir / 'config.yaml'}")
-
-        for cb in trainer.callbacks:
-            if isinstance(cb, L.pytorch.callbacks.ModelCheckpoint):
-                cb.dirpath = str(self.run_dir)
-
-        print(f"Run directory: {self.run_dir}")
-
-
-class MetricsSaveCallback(L.Callback):
-    """Persist training metrics to a JSON file after each N steps."""
-
-    def __init__(self, save_every_n_steps: int = 10, log_grad_norm: bool = True):
-        super().__init__()
-        self.save_every_n_steps = save_every_n_steps
-        self.log_grad_norm = log_grad_norm
-        self.metrics_history: list = []
-        self.metric_file: Optional[Path] = None
-
-    def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
-        base_dir = Path("./outputs")
-        run_name = "run"
-        for cb in trainer.callbacks:
-            if isinstance(cb, RunManager):
-                base_dir = cb.base_dir
-                run_name = cb.run_dir.name if cb.run_dir else cb.run_name
-                break
-        base_dir.mkdir(parents=True, exist_ok=True)
-        self.metric_file = base_dir / f"metrics_{run_name}.json"
-
-    def on_train_batch_end(
-        self,
-        trainer: L.Trainer,
-        pl_module: L.LightningModule,
-        outputs: Any,
-        batch: Any,
-        batch_idx: int,
-    ) -> None:
-        metrics = trainer.callback_metrics
-        if not metrics:
-            return
-        data = {
-            "epoch": trainer.current_epoch,
-            "step": trainer.global_step,
-            "metrics": {
-                k: v.item() if hasattr(v, "item") else float(v)
-                for k, v in metrics.items()
-            },
-        }
-        if self.log_grad_norm:
-            data["metrics"]["grad_norm"] = sum(
-                p.grad.norm(2).item() ** 2
-                for p in pl_module.parameters()
-                if p.grad is not None
-            ) ** 0.5
-        self.metrics_history.append(data)
-        if trainer.global_step % self.save_every_n_steps == 0:
-            self._save()
-
-    def _save(self) -> None:
-        if self.metric_file and self.metrics_history:
-            with open(self.metric_file, "w") as f:
-                json.dump(self.metrics_history, f, indent=2)
-
-    def on_train_end(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
-        self._save()
+        m = trainer.callback_metrics
+        lr = m.get("lr")
+        lr_s = f"{lr.item():.2e}" if lr is not None else "n/a"
+        line = (
+            f"epoch {trainer.current_epoch:3d} | "
+            f"train_loss={self._fmt(m, 'train_loss')} | "
+            f"val_loss={self._fmt(m, 'val_loss')} | "
+            f"R@1={self._fmt(m, 'val_R@1', nd=3)} | "
+            f"R@10={self._fmt(m, 'val_R@10', nd=3)} | "
+            f"lr={lr_s}"
+        )
+        # Append per-pair validation losses (e.g. val_image_spectrum), if any.
+        pair_keys = sorted(
+            k for k in m if k.startswith("val_") and k != "val_loss" and "_" in k[len("val_"):]
+        )
+        if pair_keys:
+            line += " | " + " | ".join(f"{k}={self._fmt(m, k)}" for k in pair_keys)
+        print(line, flush=True)

@@ -41,7 +41,7 @@ to missing data at inference.  Set to 0.0 for validation (no masking).
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import h5py
 import numpy as np
@@ -72,9 +72,11 @@ class FusionEmbeddingDataset(Dataset):
     def __init__(
         self,
         h5_path: str,
-        modality_keys: dict[str, str],
+        modality_keys: dict[str, Union[str, list[str]]],
         indices: Optional[np.ndarray] = None,
         modality_mask_prob: float = 0.0,
+        token_mask_keys: Optional[dict[str, str]] = None,
+        stats_keys: Optional[dict[str, str]] = None,
     ):
         if not modality_keys:
             raise ValueError("modality_keys must contain at least one entry.")
@@ -83,25 +85,53 @@ class FusionEmbeddingDataset(Dataset):
         if not h5_path.exists():
             raise FileNotFoundError(f"H5 file not found: {h5_path}")
 
+        token_mask_keys = token_mask_keys or {}
+        stats_keys = stats_keys or {}
+
         self._embeddings: dict[str, np.ndarray] = {}
         self._available: dict[str, np.ndarray] = {}   # (N,) bool per modality
+        self._token_masks: dict[str, np.ndarray] = {} # (N, T) bool, token-seq modalities only
+        self._stats: dict[str, np.ndarray] = {}       # (N, S) per-sample side-feature
         self._mask_prob = modality_mask_prob
 
         n_samples: Optional[int] = None
         with h5py.File(h5_path, "r") as f:
             available_keys = list(f.keys())
             for name, key in modality_keys.items():
-                if key not in f:
-                    raise KeyError(
-                        f"Key '{key}' not found in {h5_path}. "
-                        f"Available keys: {available_keys}"
-                    )
-                emb = f[key][:].astype(np.float32)
-                if emb.ndim != 2:
-                    raise ValueError(
-                        f"Embedding array for '{name}' (key='{key}') must be "
-                        f"2-D (N, D), got shape {emb.shape}"
-                    )
+                # A modality key may be a single H5 key (str) or a LIST of keys
+                # concatenated along the token axis — e.g. prepend the image CLS
+                # to the patch tokens: image: [image_patch_embed, image_cls_embed].
+                # 2-D members (N, D) become one token (N, 1, D); 3-D members keep
+                # their token axis. All members must share the last (feature) dim.
+                # A single str key keeps its native rank (2-D vector or 3-D seq).
+                keys = [key] if isinstance(key, str) else list(key)
+                parts: list[np.ndarray] = []
+                for k in keys:
+                    if k not in f:
+                        raise KeyError(
+                            f"Key '{k}' (modality '{name}') not found in {h5_path}. "
+                            f"Available keys: {available_keys}"
+                        )
+                    arr = f[k][:].astype(np.float32)
+                    if arr.ndim not in (2, 3):
+                        raise ValueError(
+                            f"Array '{k}' (modality '{name}') must be 2-D (N, D) or "
+                            f"3-D (N, T, D), got shape {arr.shape}"
+                        )
+                    if not isinstance(key, str) and arr.ndim == 2:
+                        arr = arr[:, None, :]            # (N, D) -> (N, 1, D) single token
+                    parts.append(arr)
+
+                if len(parts) == 1:
+                    emb = parts[0]
+                else:
+                    feat = parts[0].shape[-1]
+                    if any(p.shape[-1] != feat for p in parts):
+                        raise ValueError(
+                            f"Modality '{name}' concatenates {keys} but feature dims "
+                            f"differ: {[p.shape[-1] for p in parts]}"
+                        )
+                    emb = np.concatenate(parts, axis=1)  # (N, sum T, D) token sequence
                 if n_samples is None:
                     n_samples = emb.shape[0]
                 elif emb.shape[0] != n_samples:
@@ -110,8 +140,31 @@ class FusionEmbeddingDataset(Dataset):
                         f"expected {n_samples} (same as other modalities)."
                     )
                 self._embeddings[name] = emb
-                # Available = no NaN in the embedding row
-                self._available[name] = ~np.any(np.isnan(emb), axis=1)  # (N,)
+                # Available = no NaN anywhere in the row (works for 2-D and 3-D).
+                self._available[name] = ~np.any(
+                    np.isnan(emb).reshape(emb.shape[0], -1), axis=1
+                )  # (N,)
+
+                # Optional per-token validity mask (token-sequence modalities).
+                mkey = token_mask_keys.get(name)
+                if mkey is not None:
+                    if mkey not in f:
+                        raise KeyError(
+                            f"token_mask key '{mkey}' for modality '{name}' not found "
+                            f"in {h5_path}. Available keys: {available_keys}"
+                        )
+                    self._token_masks[name] = f[mkey][:].astype(bool)  # (N, T)
+
+                # Optional per-sample side-feature stats (e.g. spectrum [mean, std]).
+                skey = stats_keys.get(name)
+                if skey is not None:
+                    if skey not in f:
+                        raise KeyError(
+                            f"stats key '{skey}' for modality '{name}' not found "
+                            f"in {h5_path}. Available keys: {available_keys}"
+                        )
+                    s = f[skey][:].astype(np.float32)               # (N,) or (N, S)
+                    self._stats[name] = s[:, None] if s.ndim == 1 else s
 
         self._n_total = n_samples
         self._indices: np.ndarray = (
@@ -134,8 +187,12 @@ class FusionEmbeddingDataset(Dataset):
 
     @property
     def input_dims(self) -> dict[str, int]:
-        """Return {modality_name: embedding_dim} inferred from loaded arrays."""
-        return {name: arr.shape[1] for name, arr in self._embeddings.items()}
+        """Return {modality_name: feature_dim} inferred from loaded arrays.
+
+        Feature dim is the last axis: D for (N, D) vectors, the per-token dim for
+        (N, T, D) token sequences.
+        """
+        return {name: arr.shape[-1] for name, arr in self._embeddings.items()}
 
     def __len__(self) -> int:
         return len(self._indices)
@@ -152,7 +209,7 @@ class FusionEmbeddingDataset(Dataset):
         real_idx = self._indices[idx]
         result: dict[str, Tensor] = {}
         for name in self._embeddings:
-            emb = self._embeddings[name][real_idx]         # (D,) numpy float32
+            emb = self._embeddings[name][real_idx]         # (D,) or (T, D) float32
             avail = bool(self._available[name][real_idx])  # scalar bool
 
             # Random modality masking (training augmentation).
@@ -163,4 +220,12 @@ class FusionEmbeddingDataset(Dataset):
 
             result[f"{name}_emb"] = torch.from_numpy(emb.copy())
             result[f"{name}_avail"] = torch.tensor(avail, dtype=torch.bool)
+            if name in self._token_masks:
+                result[f"{name}_mask"] = torch.from_numpy(
+                    self._token_masks[name][real_idx].copy()
+                )                                          # (T,) bool
+            if name in self._stats:
+                result[f"{name}_stats"] = torch.from_numpy(
+                    self._stats[name][real_idx].copy()
+                )                                          # (S,) float32
         return result

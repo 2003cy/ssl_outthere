@@ -18,6 +18,132 @@ from torch import Tensor
 from .losses import info_nce_loss
 
 
+# All pooling heads share the signature forward(x, key_padding_mask) where
+# x is (B, T, dim) and key_padding_mask is (B, T) bool with True = IGNORE the
+# token (PyTorch MultiheadAttention convention). None = every token is valid.
+# `POOL_OUT_MULT` records how each strategy scales the feature dim, so the
+# downstream projector can be sized correctly.
+POOL_OUT_MULT = {"mean": 1, "max": 1, "meanmax": 2, "attention": 1}
+
+
+class MaskedMeanPool(nn.Module):
+    """Mean over valid tokens. Output (B, dim). No parameters."""
+
+    def forward(self, x: Tensor, key_padding_mask: Optional[Tensor] = None) -> Tensor:
+        if key_padding_mask is None:
+            return x.mean(dim=1)
+        valid = (~key_padding_mask).unsqueeze(-1).to(x.dtype)   # (B, T, 1)
+        summed = (x * valid).sum(dim=1)
+        denom = valid.sum(dim=1).clamp(min=1.0)                 # all-invalid → /1 → 0 vec
+        return summed / denom
+
+
+class MaskedMaxPool(nn.Module):
+    """Max over valid tokens. Output (B, dim). No parameters."""
+
+    def forward(self, x: Tensor, key_padding_mask: Optional[Tensor] = None) -> Tensor:
+        if key_padding_mask is None:
+            return x.max(dim=1).values
+        valid = (~key_padding_mask).unsqueeze(-1)               # (B, T, 1) bool
+        out = x.masked_fill(~valid, float("-inf")).max(dim=1).values
+        return torch.nan_to_num(out, neginf=0.0)                # all-invalid rows → 0
+
+
+class MaskedMeanMaxPool(nn.Module):
+    """Concatenation of masked mean and masked max. Output (B, 2*dim)."""
+
+    def __init__(self):
+        super().__init__()
+        self.mean = MaskedMeanPool()
+        self.max = MaskedMaxPool()
+
+    def forward(self, x: Tensor, key_padding_mask: Optional[Tensor] = None) -> Tensor:
+        return torch.cat(
+            [self.mean(x, key_padding_mask), self.max(x, key_padding_mask)], dim=-1
+        )
+
+
+class AttentionPool(nn.Module):
+    """Learnable-query cross-attention pooling (a.k.a. attentive pooling / MAP head).
+
+    Pools a variable-length token sequence into one fixed vector, the way AstroCLIP
+    aggregates encoder tokens: instead of taking [CLS] or mean-pooling, a single
+    learnable query attends over all tokens and returns their attention-weighted sum::
+
+        z* = Σ_i α_i · (W_v x_i),   α = softmax(q·(W_k x_i) / √d)
+
+    Query is a learned parameter independent of the input (it does not come from the
+    tokens — that is what makes this *cross*-attention, not self-attention).
+
+    Args:
+        dim:       Token embedding dimension (also the output dimension).
+        num_heads: Multi-head attention heads.
+    """
+
+    def __init__(self, dim: int, num_heads: int = 4):
+        super().__init__()
+        self.query = nn.Parameter(torch.zeros(1, 1, dim))
+        nn.init.trunc_normal_(self.query, std=0.02)
+        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+
+    def forward(self, x: Tensor, key_padding_mask: Optional[Tensor] = None) -> Tensor:
+        """
+        Args:
+            x:                (B, T, dim) token sequence.
+            key_padding_mask: (B, T) bool, True = IGNORE this token (PyTorch
+                              convention). Pass ``~valid_mask``. None = attend all.
+        Returns:
+            (B, dim) pooled vector.
+        """
+        B = x.shape[0]
+        if key_padding_mask is not None:
+            # A row with every token masked makes softmax see all -inf → NaN.
+            # Unmask such rows (their pooled output is meaningless but those
+            # samples are unavailable downstream and excluded from the loss).
+            all_masked = key_padding_mask.all(dim=1)
+            if all_masked.any():
+                key_padding_mask = key_padding_mask.clone()
+                key_padding_mask[all_masked] = False
+        q = self.query.expand(B, -1, -1)                       # (B, 1, dim)
+        pooled, _ = self.attn(q, x, x, key_padding_mask=key_padding_mask)
+        return pooled.squeeze(1)                                # (B, dim)
+
+
+class StatsEncoder(nn.Module):
+    """Encode per-sample absolute-scale stats into a pooled-space vector to ADD
+    after pooling.
+
+    Motivation: token-sequence encoders (e.g. LowResPT) normalise each sample to
+    N(0, 1) before tokenising, so the patch tokens carry only the *shape* of the
+    signal — the absolute flux scale (brightness) is gone. The image side keeps
+    its absolute scale, so re-injecting the dropped per-sample (mean, std) lets
+    the contrastive head align on brightness too.
+
+    asinh compresses the multi-decade dynamic range of f_lambda mean/std (and
+    tolerates sign/zero, unlike log); BatchNorm1d then standardises each stat
+    column with running statistics, so the downstream Linear sees ~unit-scale
+    inputs regardless of the raw flux units.
+    """
+
+    def __init__(self, stats_dim: int, out_dim: int):
+        super().__init__()
+        self.norm = nn.BatchNorm1d(stats_dim)
+        self.proj = nn.Linear(stats_dim, out_dim)
+        nn.init.trunc_normal_(self.proj.weight, std=0.02)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(self, stats: Tensor) -> Tensor:
+        """stats: (B, stats_dim) → (B, out_dim)."""
+        # Some modalities (e.g. image f150w photometry) have missing entries (NaN)
+        # for samples whose modality IS available, so they aren't caught by the
+        # caller's ~avail zeroing. Impute to 0 here so a NaN row can't poison the
+        # BatchNorm batch statistics for the whole batch.
+        s = torch.nan_to_num(stats)
+        s = torch.asinh(s)
+        s = self.norm(s)
+        return self.proj(s)
+
+
 class ModalityProjector(nn.Module):
     """Projects a modality CLS embedding to the shared latent space.
 
@@ -100,33 +226,97 @@ class MultimodalFusion(nn.Module):
         self.temperature = temperature
         # ModuleDict so projectors are registered as parameters
         self.projectors = nn.ModuleDict()
+        # Optional per-modality token pooling head (token-sequence modalities only).
+        self.pools = nn.ModuleDict()
+        # Optional per-modality side-feature encoders for per-sample absolute-scale
+        # stats (e.g. spectrum [mean, std]). Injected (added) after pooling.
+        self.stats_encoders = nn.ModuleDict()
+        # Modalities whose pooled result is the CLS vector directly (pool="cls").
+        # Tracked separately because "cls" has no pooling module.
+        self._cls_modalities: set[str] = set()
 
     def register_modality(
         self,
         name: str,
         input_dim: int,
         hidden_dim: Optional[int] = None,
+        pool: Optional[str] = None,
+        num_heads: int = 4,
+        stats_dim: Optional[int] = None,
     ) -> None:
         """Add (or overwrite) the projector for a modality.
 
         Args:
             name:       Modality identifier string (e.g. "image", "spectrum").
-            input_dim:  Dimension of the encoder's CLS output for this modality.
+            input_dim:  Feature dimension of the encoder output for this modality
+                        (the per-token dim for token-sequence modalities).
             hidden_dim: Hidden layer width.  None → single Linear layer.
+            stats_dim:  If set, register a StatsEncoder mapping a per-sample
+                        side-feature of this width (e.g. 2 for [mean, std]) into
+                        the pooled space; forward() ADDs it after pooling. None
+                        → no stats injection for this modality.
+            pool:       Token-pooling strategy applied to a (B, T, input_dim) token
+                        sequence before the projector. All strategies respect the
+                        per-modality valid-token mask passed to forward():
+                          - "mean":      masked mean         → (B, input_dim)
+                          - "max":       masked max          → (B, input_dim)
+                          - "meanmax":   concat(mean, max)   → (B, 2*input_dim)
+                          - "attention": learnable-query cross-attention (B, input_dim)
+                          - None:        modality is already a (B, input_dim) vector;
+                                         no pooling.
+            num_heads:  Heads for the AttentionPool (ignored unless pool="attention").
         """
-        self.projectors[name] = ModalityProjector(input_dim, self.latent_dim, hidden_dim)
+        pooled_dim = input_dim
+        if pool in (None, "none"):
+            pooler = None
+        elif pool == "cls":
+            # The input IS the CLS representation already — point modality_keys at the
+            # CLS dataset. No pooling module; forward uses it directly (token 0 if the
+            # input still carries a token axis).
+            pooler = None
+            self._cls_modalities.add(name)
+        elif pool == "attention":
+            pooler = AttentionPool(input_dim, num_heads=num_heads)
+        elif pool == "mean":
+            pooler = MaskedMeanPool()
+        elif pool == "max":
+            pooler = MaskedMaxPool()
+        elif pool == "meanmax":
+            pooler = MaskedMeanMaxPool()
+        else:
+            raise ValueError(
+                f"Unknown pool='{pool}' for modality '{name}' "
+                f"(use one of: mean, max, meanmax, attention, cls, None)."
+            )
+        if pooler is not None:
+            self.pools[name] = pooler
+            pooled_dim = input_dim * POOL_OUT_MULT[pool]
+        self.projectors[name] = ModalityProjector(pooled_dim, self.latent_dim, hidden_dim)
+        if stats_dim is not None:
+            self.stats_encoders[name] = StatsEncoder(stats_dim, pooled_dim)
 
     def forward(
         self,
         inputs: dict[str, Tensor],
         availability: dict[str, Tensor],
+        masks: Optional[dict[str, Tensor]] = None,
+        stats: Optional[dict[str, Tensor]] = None,
     ) -> dict[str, Tensor]:
         """Project all available modality embeddings to the shared latent space.
 
         Args:
-            inputs:       {name: (B, d_in)} — raw CLS embeddings from each encoder.
+            inputs:       {name: (B, d_in)} pre-pooled vectors, or
+                          {name: (B, T, d_in)} token sequences for modalities
+                          registered with pool="attention".
                           Only modalities present in the batch need to be included.
             availability: {name: (B,) bool} — True where the modality exists for a sample.
+            masks:        {name: (B, T) bool} valid-token masks for token-sequence
+                          modalities (True = valid token). Optional; None for a
+                          modality means all tokens are valid.
+            stats:        {name: (B, S) float} per-sample side-features (e.g.
+                          [mean, std]); ADDed in pooled space via the modality's
+                          StatsEncoder. Only used for modalities registered with
+                          stats_dim. Optional.
 
         Returns:
             {name: (B, D)} — L2-normalized embeddings in the shared latent space.
@@ -134,6 +324,8 @@ class MultimodalFusion(nn.Module):
         Raises:
             ValueError: if a modality name in `inputs` was not registered.
         """
+        masks = masks or {}
+        stats = stats or {}
         embeddings: dict[str, Tensor] = {}
         for name, x in inputs.items():
             if name not in self.projectors:
@@ -141,11 +333,33 @@ class MultimodalFusion(nn.Module):
                     f"Modality '{name}' not registered. "
                     f"Call register_modality('{name}', input_dim=...) first."
                 )
+            avail = availability[name]
+            x = x.clone()
+            if name in self._cls_modalities:
+                # pool="cls": input is the CLS itself; take token 0 if it still
+                # carries a token axis, otherwise use the vector as-is.
+                if x.dim() == 3:
+                    x = x[:, 0, :]
+            elif name in self.pools:
+                # Token-sequence modality → learnable-query attention pooling.
+                # Neutralize missing/NaN rows before attention so they cannot
+                # produce NaNs that poison the pool's gradients.
+                x[~avail] = 0.0
+                m = masks.get(name)
+                kpm = ~m if m is not None else None              # PyTorch: True = ignore
+                x = self.pools[name](x, key_padding_mask=kpm)    # (B, d_in)
+            # Inject per-sample side-feature (e.g. spectrum [mean, std]) in pooled
+            # space. Zero the stats of missing/masked rows first so their NaNs (or
+            # arbitrary values) can't poison BatchNorm's batch statistics; those
+            # rows are zeroed wholesale below anyway.
+            if name in self.stats_encoders and name in stats:
+                s = stats[name].clone()
+                s[~avail] = 0.0
+                x = x + self.stats_encoders[name](s)
             # Zero out missing-modality rows before projecting to prevent NaN
             # gradients: F.normalize backward on NaN inputs (even with zero
             # incoming grad) produces NaN, which poisons projector weight grads.
-            x = x.clone()
-            x[~availability[name]] = 0.0
+            x[~avail] = 0.0
             embeddings[name] = self.projectors[name](x)
         return embeddings
 
