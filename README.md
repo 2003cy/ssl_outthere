@@ -56,7 +56,7 @@ Run any command inside an environment with `pixi run -e <env> <cmd>`, or drop in
 `pixi shell -e <env>`. For modification to the envs, refer to pixi [documentation](https://pixi.prefix.dev/latest/).
 
 > **Which env for which GPU:** Use **`default` (cu117) on A100** and lower (sm_80) — this is the tested
-> path. The **`h100` (cu118)** env targets H100 (sm_90) is extensively used for pretraining of the spectrum/CLIP/downstream models, but the image encoder has not been tested.
+> path. The **`h100` (cu118)** env targets H100 (sm_90) was extensively used for pretraining of the spectrum/CLIP/downstream models, but the image encoder has not been tested, proceed with caution.
 
 ---
 
