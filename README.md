@@ -6,9 +6,9 @@ and **NIRSpec/prism spectra**. The pipeline pretrains an **image encoder** and a
 encoder** independently, fuses them with a versitile option including **CLIP-style contrastive head** or a simple **cross-attention** pooling into a final joint latent
 space, and probes downstream physical properties (redshift, stellar mass, morphology).
 
-The image encoder is a modified version of[AstroCLIP](https://github.com/PolymathicAI/AstroCLIP)'s adaptation
+The image encoder is a highly modified version of[AstroCLIP](https://github.com/PolymathicAI/AstroCLIP)'s adaptation
 of [DINOv2](https://github.com/facebookresearch/dinov2) (self-distillation + masked image
-modeling), customized for single-channel JWST galaxy cutouts, noise augmentations and supports (in progress)variable input resolution via Sinusoial positional encoding.
+modeling), customized for versatile hyperparameter choise beyond default viT (base, large ...), single-channel JWST galaxy cutouts, noise augmentations and supports (in progress)variable input resolution via Sinusoial positional encoding.
 
 ---
 
