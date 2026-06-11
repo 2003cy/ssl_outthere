@@ -1,4 +1,15 @@
-"""Parallel per-tile exporter that writes per-tile cutouts per filter."""
+"""Parallel per-tile exporter: writes a minimal image-store HDF5 per filter.
+
+Design: the HDF5 stores only the *contract* fields needed to identify and locate
+each cutout — `image`, `seg`, `id`, `ra`, `dec` — plus survey/filter/pixscale as
+file-level attributes. No catalog metadata is duplicated here.
+
+Why: for COSMOS-Web the cutout's `id` is exactly the row index into the master
+catalogs (photom / lephare / ml_morph are row-aligned), so any metadata is joined
+on demand by `id` in memory at downstream time. Third-party catalogs that lack our
+`id` (e.g. DJA spectra) are matched positionally via `ra`/`dec`. This keeps the
+(large) image store stable: adding labels never requires rewriting it.
+"""
 
 from __future__ import annotations
 
@@ -14,24 +25,14 @@ from astropy.io import fits
 from astropy.table import Table
 from tqdm.auto import tqdm
 
-BASE_COLUMNS: tuple[str, ...] = (
-    'id',
-    'tile',
-    'ra',
-    'dec',
-    'a_image',
-    'b_image',
-    'theta_image',
-    'sersic',
-    'sersic_err',
-)
-
-FILTER_COLUMNS: tuple[str, ...] = (
-    'snr_{filter}',
-    'flux_auto_{filter}',
-    'flux_err_auto_{filter}',
-    'flux_aper_{filter}',
-    'flux_err_aper_{filter}',
+# Catalog columns the worker needs: id/ra/dec are stored; the rest drive the cutout.
+REQUIRED_COLUMNS: tuple[str, ...] = (
+    'id',          # == row index into the COSMOS-Web master catalogs (stored)
+    'ra',          # stored — universal join key for third-party catalogs
+    'dec',         # stored
+    'segment-id',  # selects the object's pixels in the segmentation map
+    'x_image',     # cutout center
+    'y_image',
 )
 
 
@@ -46,6 +47,7 @@ class ExportConfig:
     segmentation_template: str
     filter_template: str
     tile_output_dir: str
+    survey: str
     show_progress: bool
 
 
@@ -55,18 +57,6 @@ class TileResult:
     path: str | None
     samples: int
     error: str | None = None
-
-
-def build_column_list(filter_name: str, extra_columns: Sequence[str] | None = None) -> list[str]:
-    print(f'building columns for filter: {filter_name}')
-    per_filter = [col.format(filter=filter_name) for col in FILTER_COLUMNS]
-    columns = list(BASE_COLUMNS) + per_filter
-    if extra_columns:
-        for name in extra_columns:
-            if name not in columns:
-                columns.append(name)
-    print(f'total metadata columns: {len(columns)}\n')
-    return columns
 
 
 def _safe_cutout(image: np.ndarray, x_center: float, y_center: float, size: int) -> np.ndarray | None:
@@ -82,43 +72,6 @@ def _safe_cutout(image: np.ndarray, x_center: float, y_center: float, size: int)
     return image[..., y0:y1, x0:x1]
 
 
-def _sanitize_value(value):
-    if isinstance(value, np.ma.MaskedArray):
-        value = value.filled(np.nan)
-    elif getattr(value, 'mask', False):
-        value = np.nan
-    if isinstance(value, (bytes, np.bytes_)):
-        return value.decode('utf-8')
-    arr = np.asarray(value)
-    if arr.shape == ():
-        item = arr.item()
-        if isinstance(item, (bytes, np.bytes_)):
-            return item.decode('utf-8')
-        return item
-    return arr
-
-
-def _meta_array(values: list) -> tuple[np.ndarray, object]:
-    first = values[0]
-    if isinstance(first, str):
-        data = np.asarray(['' if v is None else str(v) for v in values], dtype=object)
-        dtype = h5py.string_dtype('utf-8')
-        return data, dtype
-    if isinstance(first, np.ndarray):
-        data = np.stack(values)
-        return data, data.dtype
-    arr = np.asarray(values)
-    if arr.dtype.kind in {'U', 'S'}:
-        data = np.asarray(arr.tolist(), dtype=object)
-        dtype = h5py.string_dtype('utf-8')
-        return data, dtype
-    if arr.dtype.kind == 'O' and all(isinstance(v, str) for v in values):
-        data = np.asarray(['' if v is None else str(v) for v in values], dtype=object)
-        dtype = h5py.string_dtype('utf-8')
-        return data, dtype
-    return arr, arr.dtype
-
-
 def _chunk_shape(chunk_len: int, data_shape: tuple[int, ...]) -> tuple[int, ...]:
     chunk0 = max(1, min(chunk_len, data_shape[0]))
     return (chunk0,) + data_shape[1:]
@@ -128,7 +81,6 @@ def _process_tile(
     tile_rows: Table,
     tile_label,
     filter_name: str,
-    column_names: Sequence[str],
     config: ExportConfig,
 ) -> TileResult:
     tile_str = tile_label.decode('utf-8') if isinstance(tile_label, (bytes, np.bytes_)) else str(tile_label)
@@ -158,7 +110,9 @@ def _process_tile(
 
     images: list[np.ndarray] = []
     segs: list[np.ndarray] = []
-    meta_store: dict[str, list] = {name: [] for name in column_names}
+    ids: list[int] = []
+    ras: list[float] = []
+    decs: list[float] = []
     row_bar = tqdm(
         total=len(tile_rows),
         desc=f"{filter_name} rows {tile_str}",
@@ -174,8 +128,9 @@ def _process_tile(
             continue
         images.append(img_cut.astype(np.float32))
         segs.append(seg_cut.astype(np.uint8))
-        for name in column_names:
-            meta_store[name].append(_sanitize_value(row[name]))
+        ids.append(int(row['id']))
+        ras.append(float(row['ra']))
+        decs.append(float(row['dec']))
 
     row_bar.close()
 
@@ -185,11 +140,9 @@ def _process_tile(
 
     image_arr = np.stack(images)
     seg_arr = np.stack(segs)
-    meta_datasets: dict[str, tuple[np.ndarray, object]] = {}
-    for name, values in meta_store.items():
-        if not values:
-            continue
-        meta_datasets[name] = _meta_array(values)
+    id_arr = np.asarray(ids, dtype=np.int64)
+    ra_arr = np.asarray(ras, dtype=np.float64)
+    dec_arr = np.asarray(decs, dtype=np.float64)
 
     os.makedirs(config.tile_output_dir, exist_ok=True)
     output_filename = f'{filter_name}_{tile_str}.h5'
@@ -201,33 +154,30 @@ def _process_tile(
 
     with h5py.File(tile_path, 'w') as h5f:
         print(f'tile {tile_str}: writing datasets -> {tile_path}')
-        h5f.create_dataset(
-            'image',
-            data=image_arr,
-            chunks=_chunk_shape(config.chunk_size, image_arr.shape),
-            dtype=np.float32,
-        )
-        h5f.create_dataset(
-            'seg',
-            data=seg_arr,
-            chunks=_chunk_shape(config.chunk_size, seg_arr.shape),
-            dtype=np.uint8,
-        )
-        for name, (data, dtype) in meta_datasets.items():
-            h5f.create_dataset(
-                name,
-                data=data,
-                chunks=_chunk_shape(config.chunk_size, data.shape),
-                dtype=dtype,
-            )
+        h5f.create_dataset('image', data=image_arr,
+                            chunks=_chunk_shape(config.chunk_size, image_arr.shape), dtype=np.float32)
+        h5f.create_dataset('seg', data=seg_arr,
+                            chunks=_chunk_shape(config.chunk_size, seg_arr.shape), dtype=np.uint8)
+        # Contract identity/position fields — everything else joins by these.
+        h5f.create_dataset('id', data=id_arr, dtype=np.int64)
+        h5f.create_dataset('ra', data=ra_arr, dtype=np.float64)
+        h5f.create_dataset('dec', data=dec_arr, dtype=np.float64)
+        # Self-describing, constant-per-file attributes.
+        h5f.attrs['survey'] = config.survey
+        h5f.attrs['filter'] = filter_name
+        h5f.attrs['tile'] = tile_str
+        h5f.attrs['pixscale_mas'] = 30.0
+        h5f.attrs['bunit'] = 'MJy/sr'
+        h5f.attrs['image_size'] = int(config.image_size)
+        h5f.attrs['seg_size'] = int(config.seg_size)
 
     print(f'tile {tile_str}: saved {image_arr.shape[0]} samples to {tile_path}')
     return TileResult(tile=tile_str, path=tile_path, samples=image_arr.shape[0])
 
+
 def _export_filter_parallel(
     catalog: Table,
     filter_name: str,
-    column_names: Sequence[str],
     args: argparse.Namespace,
 ) -> None:
     image_size = args.image_size - (args.image_size % 2)
@@ -245,13 +195,14 @@ def _export_filter_parallel(
         segmentation_template=args.segmentation_template,
         filter_template=args.filter_template,
         tile_output_dir=filter_output_dir,
+        survey=args.survey,
         show_progress=not args.no_progress,
     )
 
     tiles = np.unique(np.asarray(catalog['tile']))
     print(f'{filter_name}: found {len(tiles)} tiles in catalog')
     tasks = []
-    required_columns = list(column_names) + ['x_image', 'y_image', 'segment-id']
+    required_columns = list(REQUIRED_COLUMNS)
 
     for tile in tiles:
         tile_mask = np.asarray(catalog['tile'] == tile)
@@ -276,7 +227,7 @@ def _export_filter_parallel(
 
     print(f'{filter_name}: launching up to {max_workers} workers')
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_process_tile, subset, tile, filter_name, column_names, config) for subset, tile in tasks]
+        futures = [executor.submit(_process_tile, subset, tile, filter_name, config) for subset, tile in tasks]
         tile_progress = tqdm(total=len(futures), desc=f'{filter_name} tiles', disable=not show_progress)
         for future in as_completed(futures):
             try:
@@ -303,11 +254,11 @@ def _export_filter_parallel(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Parallel per-tile cutout exporter.')
+    parser = argparse.ArgumentParser(description='Parallel per-tile cutout exporter (minimal image store).')
     parser.add_argument('--catalog', required=True, help='Path to COSMOS master catalog FITS file.')
     parser.add_argument('--filters', nargs='+', required=True, help='One or more filters, e.g., f115w f150w.')
     parser.add_argument('--output-dir', required=True, help='Directory where per-filter HDF5 files will be written.')
-    parser.add_argument('--extra-column', action='append', default=[], help='Additional catalog columns to include (repeatable).')
+    parser.add_argument('--survey', default='cosmos', help='Survey label stored as an h5 attribute.')
     parser.add_argument('--base-dir', default='.', help='Base directory used to resolve FITS mosaics.')
     parser.add_argument('--segmentation-dir', default='segmentation_maps', help='Folder containing segmentation FITS files.')
     parser.add_argument('--filter-dir', default=None, help='Folder containing per-filter mosaics (defaults to filter name).')
@@ -325,13 +276,11 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     catalog = Table.read(args.catalog)
-    mask = (catalog['warn_flag'] <= 2) & ((catalog['snr_f115w']>5) | (catalog['snr_f150w']>5))
+    mask = (catalog['warn_flag'] <= 2) & ((catalog['snr_f115w'] > 5) | (catalog['snr_f150w'] > 5))
     catalog = catalog[mask]
-    extra = args.extra_column or None
 
     for filter_name in args.filters:
-        columns = build_column_list(filter_name, extra)
-        _export_filter_parallel(catalog, filter_name, columns, args)
+        _export_filter_parallel(catalog, filter_name, args)
 
 
 if __name__ == '__main__':
