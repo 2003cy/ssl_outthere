@@ -6,9 +6,9 @@ and **NIRSpec/prism spectra**. The pipeline pretrains an **image encoder** and a
 encoder** independently, fuses them with a versitile option including **CLIP-style contrastive head** or a simple **cross-attention** pooling into a final joint latent
 space, and probes downstream physical properties (redshift, stellar mass, morphology).
 
-The image encoder is a modified version of[AstroCLIP](https://github.com/PolymathicAI/AstroCLIP)'s adaptation
+The image encoder is a highly modified version of[AstroCLIP](https://github.com/PolymathicAI/AstroCLIP)'s adaptation
 of [DINOv2](https://github.com/facebookresearch/dinov2) (self-distillation + masked image
-modeling), customized for single-channel JWST galaxy cutouts, noise augmentations and supports (in progress)variable input resolution via Sinusoial positional encoding.
+modeling), customized for versatile hyperparameter choise beyond default viT (base, large ...), single-channel JWST galaxy cutouts, noise augmentations and supports (in progress)variable input resolution via Sinusoial positional encoding.
 
 ---
 
@@ -56,7 +56,7 @@ Run any command inside an environment with `pixi run -e <env> <cmd>`, or drop in
 `pixi shell -e <env>`. For modification to the envs, refer to pixi [documentation](https://pixi.prefix.dev/latest/).
 
 > **Which env for which GPU:** Use **`default` (cu117) on A100** and lower (sm_80) — this is the tested
-> path. The **`h100` (cu118)** env targets H100 (sm_90) is extensively used for pretraining of the spectrum/CLIP/downstream models, but the image encoder has not been tested.
+> path. The **`h100` (cu118)** env targets H100 (sm_90) was extensively used for pretraining of the spectrum/CLIP/downstream models, but the image encoder has not been tested, proceed with caution.
 
 ---
 
