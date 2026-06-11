@@ -29,6 +29,7 @@ images/galaxy_zoo
 *.pt
 *.gz
 *.png
+*.pdf
 *.gif
 *.json
 *.npy
