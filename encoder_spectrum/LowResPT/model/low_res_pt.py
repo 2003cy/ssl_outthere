@@ -611,3 +611,85 @@ class LowResPT(L.LightningModule):
         x = self.encode(patches, wave_token, token_valid_mask, stats,
                         patch_stats=patch_stats)
         return x[:, 0, :]  # CLS token: (B, D)
+
+    @torch.no_grad()
+    def reconstruct(
+        self,
+        flux: Tensor,
+        wavelength: Tensor,
+        valid_mask: Tensor,
+        masked: bool = False,
+        block_k: int = 1,
+    ) -> dict:
+        """Reconstruct spectra from raw input under one of two protocols.
+
+        Shared prefix: normalize → patchify → encode → decode, returning the
+        intermediates a caller needs to map patches back to pixel space
+        (overlap averaging).
+
+        masked=False (full-visible):
+            Every token is visible; one forward pass reconstructs all patches.
+            With use_patch_stats=True, `forward` auto-computes per-patch stats
+            from the all-visible patches — matching the all-visible regime of
+            training/validation.
+
+        masked=True (MAE-consistent, leave-block-out):
+            For each token t, a block of `block_k` consecutive tokens centred on
+            t is hidden from the encoder (patch values AND per-patch stats zeroed,
+            to prevent stat leakage), and only that token's prediction is kept.
+            Leak-free iff the block fully hides t's pixels (e.g. block_k=1 when
+            stride == patch_size; use 2–3 when stride < patch_size).
+
+        Args:
+            flux, wavelength, valid_mask: (B, L) — observed-frame wavelength (µm).
+            masked:  select the masked (True) or full-visible (False) protocol.
+            block_k: number of consecutive tokens hidden per target (masked only).
+
+        Returns:
+            recon_patches:    (B, N, P) reconstructed patches (normalised flux space)
+            target:           (B, N, P) input patches = the reconstruction target
+            flux_norm:        (B, L)    per-pixel normalised input flux
+            wave_token:       (B, N)    mean wavelength per token
+            valid_patches:    (B, N, P) bool, per-pixel patch validity
+            token_valid_mask: (B, N)    bool, per-token validity
+            stats:            (B, 2)    per-sample [mean, std]
+            L_used:           int       pixels used (trailing partial patch dropped)
+        """
+        flux_norm, mean, std = self._normalize_flux(
+            flux, valid_mask, self.hparams.min_std
+        )
+        stats = torch.cat([mean, std], dim=-1)
+        patches, wave_token, valid_patches, token_valid_mask, L_used = self._patchify(
+            flux_norm, wavelength, valid_mask
+        )
+
+        if not masked:
+            recon_patches = self.forward(
+                patches, wave_token, token_valid_mask, stats
+            )["recon_patches"]
+        else:
+            B, N, P = patches.shape
+            patch_stats = self._compute_patch_stats(patches, valid_patches)
+            half_lo = (block_k - 1) // 2
+            half_hi = block_k // 2
+            recon_patches = torch.zeros(B, N, P, device=patches.device,
+                                        dtype=patches.dtype)
+            for t in range(N):
+                tlo = max(0, t - half_lo)
+                thi = min(N - 1, t + half_hi)
+                mp = patches.clone();     mp[:, tlo:thi + 1, :] = 0.0
+                ps = patch_stats.clone(); ps[:, tlo:thi + 1, :] = 0.0
+                out = self.forward(mp, wave_token, token_valid_mask, stats,
+                                   patch_stats=ps)
+                recon_patches[:, t, :] = out["recon_patches"][:, t, :]
+
+        return {
+            "recon_patches":    recon_patches,
+            "target":           patches,
+            "flux_norm":        flux_norm,
+            "wave_token":       wave_token,
+            "valid_patches":    valid_patches,
+            "token_valid_mask": token_valid_mask,
+            "stats":            stats,
+            "L_used":           L_used,
+        }

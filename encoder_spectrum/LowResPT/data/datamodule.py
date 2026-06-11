@@ -48,6 +48,9 @@ class LowResDataModule(L.LightningDataModule):
         min_sn50:             Exclude spectra with sn50 < this value.
         min_redshift:         Exclude spectra with z_best <= this value.
         max_redshift:         Exclude spectra with z_best > this value (None = no cut).
+        frac_valid_pix:       Keep spectra whose valid-pixel fraction inside the
+                              [wl_ref_min, wl_ref_max] window is > this ([0,1];
+                              None = no cut).
         use_jansky:           If True, deliver raw uJy (f_nu) flux; if False
                               (default), convert to f_lambda (∝ f_nu / λ²).
     """
@@ -60,10 +63,11 @@ class LowResDataModule(L.LightningDataModule):
         train_val_split: float = 0.9,
         use_infinite_sampler: bool = True,
         grades: Optional[Sequence[int]] = (1, 2, 3),
-        min_obs_frac: Optional[float] = 0.5,
+        min_obs_frac: Optional[float] = 0.,
         min_sn50: Optional[float] = None,
         min_redshift: Optional[float] = None,
         max_redshift: Optional[float] = None,
+        frac_valid_pix: Optional[float] = None,
         use_jansky: bool = False,
         wl_ref_min: float = 1.0,
         wl_ref_max: float = 2.0,
@@ -89,6 +93,7 @@ class LowResDataModule(L.LightningDataModule):
                 min_sn50=getattr(self.hparams, "min_sn50", None),
                 min_redshift=getattr(self.hparams, "min_redshift", None),
                 max_redshift=getattr(self.hparams, "max_redshift", None),
+                frac_valid_pix=getattr(self.hparams, "frac_valid_pix", None),
                 wl_ref_min=getattr(self.hparams, "wl_ref_min", 1.0),
                 wl_ref_max=getattr(self.hparams, "wl_ref_max", 2.0),
                 use_jansky=getattr(self.hparams, "use_jansky", False),

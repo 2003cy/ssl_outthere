@@ -22,7 +22,8 @@ Flux units: stored as f_nu in microjansky. With use_jansky=False (default) the
 flux is converted to f_lambda (∝ f_nu / λ²); with use_jansky=True the raw uJy
 (f_nu) flux is returned unchanged.
 
-Valid mask: True where flux != 0 (computed from the raw flux, conversion-independent).
+Valid mask: the per-pixel `valid_spec` reduction flag (conversion-independent;
+not inferred from flux != 0, since a valid pixel may legitimately have flux 0).
 
 IO note
 -------
@@ -67,6 +68,11 @@ class LowResDataset(Dataset):
         wl_ref_max:   Upper bound (µm); pixels with wave >= wl_ref_max are dropped
                       (None = no cut). Default window (1.0, 2.0) µm matches the
                       old low-res cutout coverage (56 pixels).
+        frac_valid_pix: Keep only spectra whose fraction of valid pixels INSIDE
+                      the [wl_ref_min, wl_ref_max] window is > this value, in
+                      [0, 1] (None = no cut). Removes near-empty spectra that have
+                      little/no usable data in the window and would collapse to a
+                      degenerate (all-zero) embedding.
         use_jansky:   If True, return the raw uJy (f_nu) flux. If False (default),
                       convert to f_lambda (∝ f_nu / λ²).
     """
@@ -75,12 +81,13 @@ class LowResDataset(Dataset):
         self,
         fits_path: str,
         grades: Optional[Sequence[int]] = (1, 2, 3),
-        min_obs_frac: Optional[float] = 0.5,
+        min_obs_frac: Optional[float] = 0.,
         min_sn50: Optional[float] = None,
         min_redshift: Optional[float] = None,
         max_redshift: Optional[float] = None,
         wl_ref_min: Optional[float] = 1.0,
         wl_ref_max: Optional[float] = 2.0,
+        frac_valid_pix: Optional[float] = None,
         use_jansky: bool = False,
     ):
         self.use_jansky = use_jansky
@@ -109,10 +116,13 @@ class LowResDataset(Dataset):
             cat = hdul["CATALOG"].data
             total_samples = cat.shape[0]
 
-            # Flux: read the column once, slice to the window, NaN/Inf → 0
-            # (matches the old HDF5 export). Cast to float32.
+            # Flux: read the column once, slice to the window, NaN/Inf → 0.
             flux = np.asarray(cat["flux"], dtype=np.float32)[:, wl_keep]
-            flux[~np.isfinite(flux)] = 0.0
+            finite = np.isfinite(flux)
+            flux[~finite] = 0.0
+
+            # Valid mask: the authoritative per-pixel validity flag from the data
+            valid = np.asarray(cat["valid_spec"], dtype=bool)[:, wl_keep] & finite
 
             meta = {c: np.asarray(cat[c]) for c in _META_COLS}
 
@@ -126,10 +136,12 @@ class LowResDataset(Dataset):
             mask &= np.isin(meta["grade"], np.asarray(grades))
             _report(f"grade in {tuple(grades)}")
 
+        '''
         if min_obs_frac is not None:
             obsf = meta["obs_365_frac"].astype(np.float64)
             mask &= np.isfinite(obsf) & (obsf > min_obs_frac)
             _report(f"obs_365_frac > {min_obs_frac}")
+        '''
 
         if min_sn50 is not None:
             sn50 = meta["sn50"].astype(np.float64)
@@ -146,11 +158,23 @@ class LowResDataset(Dataset):
             mask &= np.isfinite(z) & (z <= max_redshift)
             _report(f"z_best <= {max_redshift}")
 
+        # Window-coverage cut: keep only spectra whose fraction of valid pixels
+        # INSIDE the [wl_ref_min, wl_ref_max] window exceeds frac_valid_pix.
+        # `valid` is already sliced to the window, so valid.mean(axis=1) is that
+        # fraction per object. Drops near-empty spectra (e.g. zero valid pixels in
+        # the window) that would otherwise collapse to an identical all-zero
+        # embedding / patch sequence and pin a probe's predictions to one value.
+        if frac_valid_pix is not None:
+            valid_frac = valid.mean(axis=1)                  # (total_samples,) in [0,1]
+            mask &= valid_frac > frac_valid_pix
+            _report(f"valid_pix_frac > {frac_valid_pix}")
+
         self.valid_indices = np.where(mask)[0]
         self.n_samples = len(self.valid_indices)
 
         # ── Preload filtered, windowed arrays into RAM (dataset order) ──
-        self._flux = np.ascontiguousarray(flux[self.valid_indices])  # (n, Lwin) raw f_nu
+        self._flux = np.ascontiguousarray(flux[self.valid_indices])    # (n, Lwin) raw f_nu
+        self._valid = np.ascontiguousarray(valid[self.valid_indices])  # (n, Lwin) bool
         for c in _META_COLS:
             setattr(self, c, meta[c][self.valid_indices])
 
@@ -167,16 +191,15 @@ class LowResDataset(Dataset):
             flux:       Tensor (Lwin,)  f_lambda (∝ f_nu/λ²) by default, or uJy
                                         (f_nu) if use_jansky=True
             wavelength: Tensor (Lwin,)  observed-frame wavelength in microns
-            valid_mask: Tensor (Lwin,)  bool, True where flux != 0
+            valid_mask: Tensor (Lwin,)  bool, the `valid_spec` reduction flag
             redshift:   scalar Tensor, z_best (downstream analysis only)
         """
-        
         flux       = self._flux[idx].copy()       # raw f_nu (uJy)
         wavelength = self.wave                     # shared grid (Lwin,)
 
-        # Valid mask from the raw f_nu flux so it is independent of the
-        # flux-unit conversion below.
-        valid_mask = flux != 0.0
+        # Authoritative per-pixel validity from the `valid_spec` column
+        # (conversion-independent; not inferred from flux != 0).
+        valid_mask = self._valid[idx].copy()
 
         if not self.use_jansky:
             # f_lambda ∝ f_nu / λ². Wavelength is observed-frame µm, finite & >0,

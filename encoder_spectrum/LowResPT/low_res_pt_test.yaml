@@ -7,7 +7,7 @@ model:
   patch_size: 4
   stride: 2
   patch_invalid_threshold: 0.25
-  mask_ratio: 0.75
+  mask_ratio: 0.5
   min_unmasked: 4
   max_line_blocks: 0
   num_line_detect: 3  # detect the top N strongest lines
@@ -31,15 +31,14 @@ data:
   train_val_split: 0.9
   use_infinite_sampler: true
   # Grade / obs-fraction pre-selection (previously baked into the HDF5 build).
-  grades: [0,1, 2, 3]
-  min_obs_frac: 0.5
-  min_sn50: -1.0
+  grades: [1, 2, 3]
+  min_obs_frac: 0. #test parameter, valid spectrum overlap fraction with F150W 
+  min_sn50: 0
   min_redshift: 0.0
   max_redshift: null   # null = no upper-z cut (keep all z > min_redshift)
-  # false (default) = convert flux to f_lambda (∝ f_nu/λ²); true = raw uJy (f_nu)
-  use_jansky: false
-  # Observed-frame wavelength window (µm) — cuts each spectrum to this range at
-  # the dataset level AND sets the positional-encoding reference range.
+  frac_valid_pix: 0.5  # keep spectra with > this valid-pixel fraction in [wl_ref_min,wl_ref_max] ([0,1]; null = no cut)
+  use_jansky: false    # false (default) = convert flux to f_lambda (∝ f_nu/λ²); true = raw uJy (f_nu)
+  # Observed-frame wavelength window (µm) — cuts each spectrum to this range
   wl_ref_min: 0.53
   wl_ref_max: 5.6
 
