@@ -82,7 +82,7 @@ train:
   OFFICIAL_EPOCH_LENGTH: 1000
   cache_dataset: true
   centering: "centering"
-  re_min_pix: 2.0
+  re_min_pix: null
   re_max_pix: null
 
 student:

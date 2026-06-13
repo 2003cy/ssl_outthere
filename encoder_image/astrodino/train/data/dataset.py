@@ -10,8 +10,11 @@ from torchvision.datasets import VisionDataset
 
 logger = logging.getLogger("astrodino")
 
-# JWST NIRCam pixel scale: 30 mas/pixel → conversion factor from degrees to pixels
-_JWST_DEG_TO_PIX: float = 3600 * 1000 / 30.0
+# JWST NIRCam default pixel scale: 30 mas/pixel → degrees-to-pixels conversion.
+# Used only as a fallback; the actual scale is read per-store from the
+# `pixscale_mas` HDF5 attribute (see JWST._read_pixscale).
+_JWST_DEFAULT_PIXSCALE_MAS: float = 30.0
+_JWST_DEG_TO_PIX: float = 3600 * 1000 / _JWST_DEFAULT_PIXSCALE_MAS
 
 # Reproducible 90 / 5 / 5 train-val-test split fractions
 _SPLIT_FRACTIONS = {
@@ -31,15 +34,26 @@ class JWST(VisionDataset):
     """
     JWST dataset backed by per-tile HDF5 files under `root/<filter>/`.
 
-    Each HDF5 file contains:
-      - "image"         (N, H, W) float32  -- single-channel cutouts
-      - "ra", "dec"     (N,)               -- sky coordinates
-      - "radius_sersic" (N,)  degrees      -- Sérsic effective radius (optional)
+    Each HDF5 store (one per COSMOS-Web tile + one CEERS file) contains:
+      - "image"  (N, H, W) float32  -- single-channel cutouts, MJy/sr
+      - "ra", "dec"  (N,)           -- sky coordinates (deg)
+      - "id"     (N,) int64         -- per-store catalogue row id
+      - "seg"    (N, H, W) uint8    -- 0/1 source segmentation mask
+                                       (COSMOS tiles only; absent for CEERS)
       - any extra fields requested via `extra_returns`
 
+    Store-level HDF5 attributes include `pixscale_mas`, `image_size`,
+    `bunit`, `survey` (and `tile`/`seg_size` for COSMOS, `sky_sigma` for
+    CEERS). The degrees→pixels scale used by range filters is read from
+    `pixscale_mas` (fallback 30 mas).
+
+    Training is single-channel (image only); `seg` is currently ignored.
+
     The full catalogue is shuffled once (seed=42) and split 90/5/5 into
-    train / val / test.  An optional effective-radius cut can further
-    restrict which samples are eligible before the split.
+    train / val / test. An optional range cut on a per-sample field (e.g. a
+    morphology field added later) can restrict eligible samples before the
+    split; the only wired cut is the Sérsic-radius cut, inactive unless the
+    `radius_sersic` field is present and `re_min_pix`/`re_max_pix` are set.
 
     Args:
         split:          One of "train", "val", "test".
@@ -76,6 +90,9 @@ class JWST(VisionDataset):
         # Step 1: open all tile h5 files
         self._files = self._open_h5_files(root, filter)
 
+        # Degrees→pixels scale from the store attrs (fallback to the 30 mas default).
+        self._deg_to_pix = self._read_pixscale(self._files)
+
         # Step 2: build cumulative index boundaries across files
         #   _cum_lengths[i] = first global index belonging to file i
         self._cum_lengths = np.concatenate(
@@ -85,7 +102,7 @@ class JWST(VisionDataset):
         # Step 3: apply dataset filters → valid global indices
         #   To add a new filter: add a param above and a _range_filter() call below.
         valid_indices = self._build_valid_mask([
-            self._range_filter("radius_sersic", scale=_JWST_DEG_TO_PIX, re_low=re_min_pix, re_high=re_max_pix),
+            self._range_filter("radius_sersic", scale=self._deg_to_pix, re_low=re_min_pix, re_high=re_max_pix),
         ])
 
         # Step 4: shuffle and slice out the requested split
@@ -116,6 +133,16 @@ class JWST(VisionDataset):
         if not files:
             raise RuntimeError(f"No readable h5 files found in {filter_dir}")
         return files
+
+    @staticmethod
+    def _read_pixscale(files: list) -> float:
+        """Degrees→pixels factor from the `pixscale_mas` store attribute.
+
+        Reads the first store's `pixscale_mas` attribute (all f150w stores share
+        30 mas); falls back to the module default when the attribute is absent.
+        """
+        pix_mas = float(files[0].attrs.get("pixscale_mas", _JWST_DEFAULT_PIXSCALE_MAS))
+        return 3600.0 * 1000.0 / pix_mas
 
     def _range_filter(
         self,
@@ -210,7 +237,16 @@ class JWST(VisionDataset):
 
         # Optional: return extra catalogue fields as target (e.g. for evaluation)
         if self._extra_returns is not None:
-            target = [f[key][local_idx].astype("float32") for key in self._extra_returns]
+            target = []
+            for key in self._extra_returns:
+                if key not in f:
+                    # e.g. `seg` is present in COSMOS tiles but not the CEERS store.
+                    raise KeyError(
+                        f"extra_returns key '{key}' is missing from tile "
+                        f"'{os.path.basename(f.filename)}'. Available keys: "
+                        f"{list(f.keys())}"
+                    )
+                target.append(f[key][local_idx].astype("float32"))
 
         # VAL mode: return image as its own reconstruction target
         if self._split == JWST.Split.VAL.value:
