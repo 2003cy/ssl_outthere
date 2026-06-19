@@ -3,9 +3,7 @@
 Plain, readable ViT components in the style of LowResPT/model/modules.py.
 We deliberately use the same primitives LowResPT trains with on this cluster:
 explicit-softmax attention (no SDPA/flash) and an unfold+Linear patch embedding
-(no Conv2d). On the local torch 2.0.1 build the flash-SDPA kernel has no sm90
-(H100) support and the cuDNN conv backward raises CUDNN_STATUS_INTERNAL_ERROR;
-both are sidestepped here. All crops in a forward pass share one token length,
+(no Conv2d). All crops in a forward pass share one token length,
 so no attention padding mask is ever needed.
 """
 
@@ -45,7 +43,10 @@ class MLP(nn.Module):
 
 
 class Attention(nn.Module):
-    """Multi-head self-attention with explicit softmax. No mask (crops are equal-length)."""
+    """Multi-head self-attention via F.scaled_dot_product_attention. No mask (crops
+    are equal-length). On torch>=2.5 this dispatches to flash / mem-efficient kernels
+    on both A100 (sm80) and H100 (sm90), which are O(T) in memory (no (B,H,T,T) matrix
+    materialized for backward) — unlike the old explicit-softmax path."""
 
     def __init__(self, dim: int, num_heads: int, qkv_bias: bool = True, proj_bias: bool = True,
                  dropout: float = 0.0):
@@ -53,22 +54,20 @@ class Attention(nn.Module):
         assert dim % num_heads == 0, "dim must be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+        self.attn_drop = dropout
 
         self.qkv = nn.Linear(dim, 3 * dim, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, D = x.shape
         qkv = self.qkv(x).reshape(B, T, 3, self.num_heads, self.head_dim)
         q, k, v = qkv.permute(2, 0, 3, 1, 4)  # each (B, num_heads, T, head_dim)
 
-        scores = (q @ k.transpose(-2, -1)) * self.scale  # (B, num_heads, T, T)
-        attn = F.softmax(scores, dim=-1)
-        attn = self.dropout(attn)
-
-        out = (attn @ v).transpose(1, 2).reshape(B, T, D)
+        out = F.scaled_dot_product_attention(  # scales by 1/sqrt(head_dim) internally
+            q, k, v, dropout_p=self.attn_drop if self.training else 0.0,
+        )
+        out = out.transpose(1, 2).reshape(B, T, D)
         return self.proj(out)
 
 

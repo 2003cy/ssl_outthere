@@ -1,13 +1,12 @@
 #!/bin/bash -l
 #SBATCH -t 00:10:00
 #SBATCH --nodes=1
-#SBATCH --partition=gpudev
 #SBATCH --constraint="gpu"
 #SBATCH --gres=gpu:a100:4
 #SBATCH --tasks-per-node=4
 #SBATCH --cpus-per-task=18
 #SBATCH --mem=500000
-#SBATCH --output=/u/yacheng/ssl_outthere/jwst_dino_dev-%j.log
+#SBATCH --output=/u/yacheng/nexus/ssl_outthere/encoder_image/jwst_dino/sbatch/jwst_dino_dev-%j.log
 #SBATCH --mail-type=none
 #SBATCH --mail-user=yacheng@mpia.de
 
@@ -21,8 +20,9 @@ module load cuda/12.6
 config="/u/yacheng/ssl_outthere/encoder_image/jwst_dino/jwst_dino.yaml"
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-# Use the env that has torch + lightning (no dinov2 needed — JWST_DINO is self-contained).
-PYTHON=/u/yacheng/ssl_outthere/.pixi/envs/h100/bin/python
+PYTHON=/u/yacheng/ssl_outthere/.pixi/envs/default/bin/python
+CONDA_PREFIX=/u/yacheng/ssl_outthere/.pixi/envs/default
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
 cd /u/yacheng/ssl_outthere/encoder_image/jwst_dino
 

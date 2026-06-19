@@ -28,7 +28,7 @@ class _CLI(LightningCLI):
 
     def add_arguments_to_parser(self, parser):
         for key in ("patch_size", "patch_stride", "global_crops_size",
-                    "local_crops_size", "local_crops_number"):
+                    "local_crops_size", "local_crops_number", "batch_size"):
             parser.link_arguments(f"data.{key}", f"model.{key}")
 
 

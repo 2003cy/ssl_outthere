@@ -1,12 +1,13 @@
 """JWST_DINO — a self-contained Lightning re-implementation of DINOv2 pre-training.
 
 Algorithm is faithful to DINOv2 (student/teacher EMA + DINO CLS loss + iBOT patch
-loss + KoLeo, with teacher centering), but the infrastructure is Lightning:
+loss + KoLeo, with teacher centering) + image augmentation dedicated to jwst imaging,
+the infrastructure is pyLightning:
 DDP, bf16-mixed (no GradScaler), and manual optimization so the five DINO
 schedules (lr / wd / teacher momentum / teacher temp / last-layer lr), the EMA,
 per-submodule grad clipping and the last-layer freeze are all explicit.
 
-No dinov2 import: the ViT, head and losses are all vendored under model/.
+everythin, the ViT, head and losses are all vendored under model/.
 """
 
 import math
@@ -53,6 +54,7 @@ class JWST_DINO(L.LightningModule):
         global_crops_size: int = 72,
         local_crops_size: int = 36,
         local_crops_number: int = 8,
+        batch_size: int = 96,
         # ── projection head ──
         head_n_prototypes: int = 16384,
         head_bottleneck_dim: int = 192,
@@ -233,7 +235,7 @@ class JWST_DINO(L.LightningModule):
             prog_bar=True, on_step=True, on_epoch=False, batch_size=B,
         )
         self.log_dict({"lr": lr, "wd": wd, "mom": mom, "teacher_temp": t_temp},
-                      on_step=True, on_epoch=False, batch_size=B)
+                        on_step=True, on_epoch=False, batch_size=B)
         return out["loss"]
 
     def validation_step(self, batch: dict, batch_idx: int = 0):
@@ -241,8 +243,14 @@ class JWST_DINO(L.LightningModule):
         _, _, _, t_temp, _ = self._schedule_values()
         out = self._compute_losses(batch, t_temp, training=False)
         self.log_dict({f"val_{k}": v for k, v in out.items()},
-                      prog_bar=True, on_step=False, on_epoch=True, sync_dist=True, batch_size=B)
+                        prog_bar=True, on_step=False, on_epoch=True, sync_dist=True, batch_size=B)
         return out["loss"]
+
+    @property
+    def _effective_lr(self) -> float:
+        return self.hparams.lr * math.sqrt(
+            self.hparams.batch_size * self.trainer.world_size / 1024.0
+        )
 
     # ── schedules ────────────────────────────────────────────────────────────────
     def _schedule_values(self):
@@ -251,7 +259,7 @@ class JWST_DINO(L.LightningModule):
         total = max(int(self.trainer.estimated_stepping_batches), 1)
         epoch_len = h.official_epoch_length
 
-        lr = cosine_sched(step, total, h.lr, h.min_lr, warmup=h.warmup_epochs * epoch_len)
+        lr = cosine_sched(step, total, self._effective_lr, h.min_lr, warmup=h.warmup_epochs * epoch_len)
         wd = cosine_sched(step, total, h.weight_decay, h.weight_decay_end)
         mom = cosine_sched(step, total, h.momentum_teacher, h.final_momentum_teacher)
         t_temp = cosine_sched(
@@ -276,7 +284,7 @@ class JWST_DINO(L.LightningModule):
     # ── optimizer with layer-wise lr decay ──────────────────────────────────────
     def configure_optimizers(self):
         groups = self._param_groups()
-        return AdamW(groups, lr=self.hparams.lr, betas=tuple(self.hparams.betas))
+        return AdamW(groups, lr=self._effective_lr, betas=tuple(self.hparams.betas))
 
     def _param_groups(self):
         """One group per parameter, tagged with lr/wd multipliers + last-layer flag.
