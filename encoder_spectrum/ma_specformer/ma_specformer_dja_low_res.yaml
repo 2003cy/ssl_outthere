@@ -29,7 +29,7 @@ lr_scheduler: null  # Custom WarmupCosineLR callback below
 
 # Data settings
 data:
-  h5_path: /home/yacheng/ssl_outthere/images/DJA/dja_spectra_low.h5
+  h5_path: /home/yacheng/ssl_outthere/data/spectrum/dja_spectra_low.h5
   batch_size: 256
   num_workers: 4
   train_val_split: 0.9

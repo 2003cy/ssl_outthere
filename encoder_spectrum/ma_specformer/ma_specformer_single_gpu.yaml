@@ -23,7 +23,7 @@ lr_scheduler: null  # Use custom callback instead
 
 # Data settings
 data:
-  h5_path: /u/yacheng/projects/ssl_outthere/images/OUTTHERE/spectrum/f150w.h5
+  h5_path: /u/yacheng/projects/ssl_outthere/data/survey/OUTTHERE/spectrum/f150w.h5
   batch_size: 128  # Increased from 64 for single GPU, better optimization
   num_workers: 4
   train_val_split: 0.9

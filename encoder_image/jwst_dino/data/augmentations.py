@@ -16,7 +16,7 @@ import torch
 from torchvision import transforms
 
 # Measured background sky sigma per survey/field (MJy/sr), from
-# images/cosmos_2025/measure_sky_sigma_per_tile.py. Keyed by the tile alias that
+# data/survey/cosmos_2025/measure_sky_sigma_per_tile.py. Keyed by the tile alias that
 # parse_tile() pulls from each cutout's rel_path; tile names are unique across
 # surveys, so a single flat lookup (_SKY_SIGMA_BY_TILE) suffices.
 # Method: random 128px patches, masked twice before the std — coverage mask
@@ -26,11 +26,11 @@ from torchvision import transforms
 #   cosmos   — COSMOS-Web F150W per tile (remarkably uniform, 2.20e-2 .. 2.37e-2).
 #   ceers    — single 'fullceers' EGS mosaic (no sub-tiles), ~3.4x deeper.
 #   outthere — NIRISS per field, measured in the 30mas cutout domain (convert + resample,
-#              images/OutThere/measure_sky_sigma.py); ~10x per-field scatter. Bad fields
+#              data/survey/OutThere/measure_sky_sigma.py); ~10x per-field scatter. Bad fields
 #              are excluded at export (alias 'dor' star field, crt-00 saturated star).
 #   jades    — NIRCam GOODS-S/N (MJy/sr @ 30mas, no conversion), the DEEPEST survey;
 #              two fields 'gds' (GOODS-South, deepest) / 'gdn' (GOODS-North),
-#              images/JADES/measure_sky_sigma.py.
+#              data/survey/JADES/measure_sky_sigma.py.
 SKY_SIGMA = {
     "cosmos": {
         "A1": 2.2847e-02, "A2": 2.2922e-02, "A3": 2.3431e-02, "A4": 2.3138e-02,
@@ -82,6 +82,7 @@ class DataAugmentationJWSTDINO(object):
         # noise augmentation
         noise_w: float = 2,
         noise_s_max: float | None = None,
+        verbose: bool = True,
     ):
         self.local_crops_number = local_crops_number
         self.global_crops_size = global_crops_size
@@ -100,16 +101,17 @@ class DataAugmentationJWSTDINO(object):
                 "center_crop_size must be >= both global_crops_size and local_crops_size"
             )
 
-        print("###################################")
-        print("Using data augmentation parameters:")
-        print(f"local_crops_number: {local_crops_number}")
-        print(f"global_crops_size: {global_crops_size}")
-        print(f"local_crops_size: {local_crops_size}")
-        print(f"center_crop_size: {center_crop_size}")
-        print(f"noise_w: {noise_w}  noise_s_max: {noise_s_max}")
-        print("###################################")
-        print(f"Model input image: {global_crops_size}x{global_crops_size}")
-        print(f"####################################\n")
+        if verbose:
+            print("###################################")
+            print("Using data augmentation parameters:")
+            print(f"local_crops_number: {local_crops_number}")
+            print(f"global_crops_size: {global_crops_size}")
+            print(f"local_crops_size: {local_crops_size}")
+            print(f"center_crop_size: {center_crop_size}")
+            print(f"noise_w: {noise_w}  noise_s_max: {noise_s_max}")
+            print("###################################")
+            print(f"Model input image: {global_crops_size}x{global_crops_size}")
+            print(f"####################################\n")
 
         # Rotation before CenterCrop so fill artifacts are removed by the crop.
         rotation = transforms.RandomApply(

@@ -1,6 +1,6 @@
 """JWST image dataset: per-tile ``.npy`` shards indexed by a slim FITS table.
 
-Layout under ``root`` (produced by images/cosmos_2025/cutout_export_npy.py)::
+Layout under ``root`` (produced by data/survey/cosmos_2025/cutout_export_npy.py)::
 
     image_index_<survey>_<filter>.fits             one row per cutout
     <filter>/nircam_<survey>_<filter>_<tile>.npy   (N, H, W) float16, MJy/sr
@@ -43,6 +43,7 @@ class JWST(Dataset):
         filter: str = "f150w",
         survey: Union[str, Sequence[str]] = "cosmos",
         transform: Optional[Callable] = None,
+        verbose: bool = True,
     ):
         self.root = os.path.expandvars(os.path.expanduser(root))
         self.split = split
@@ -61,15 +62,18 @@ class JWST(Dataset):
             sel = self._split_indices(len(index), split)  # split within this survey
             selected.append(sel + offset)
             offset += len(index)
-            print(f"JWST [{split}] {s} — {len(sel)} / {len(index)} cutouts ({filter})")
+            if verbose:
+                print(f"JWST/{filter} [{split:<5}] {s:<9} — {len(sel)} / {len(index)} cutouts")
 
         self.rel_path = np.concatenate(rel_paths)
         self.local_idx = np.concatenate(local_idxs)
         self.indices = np.concatenate(selected)
         self.shards: dict[str, np.ndarray] = {}  # rel_path -> memmap, opened per worker
 
-        print(f"JWST [{split}] — {len(self.indices)} / {offset} cutouts total "
-              f"({', '.join(surveys)}; {filter})")
+        # The grand-total line is only informative when combining surveys; for a single
+        # survey (e.g. each per-survey val dataset) it just repeats the line above.
+        if verbose and len(surveys) > 1:
+            print(f"JWST/{filter} [{split:<5}] {'':<9} — {len(self.indices)} / {offset} cutouts \n")
 
     @staticmethod
     def _split_indices(n: int, split: str) -> np.ndarray:

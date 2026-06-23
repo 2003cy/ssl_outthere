@@ -38,7 +38,8 @@ class EpochPrinter(Callback):
         return sum(vals) / len(vals) if vals else None
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        if trainer.sanity_checking:
+        # Runs on every DDP rank; print only on rank 0 (else the line repeats N_gpu times).
+        if trainer.sanity_checking or not trainer.is_global_zero:
             return
         m = trainer.callback_metrics
         lr = m.get("lr")

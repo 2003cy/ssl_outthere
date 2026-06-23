@@ -12,7 +12,6 @@
 
 # Multi-node x multi-GPU DDP. srun launches tasks-per-node processes per node;
 # Lightning's SLURMEnvironment auto-detects SLURM_PROCID / NTASKS / NODELIST and
-# wires up the process group — no custom distributed.py needed.
 # Keep devices = GPUs-per-node and num_nodes = #nodes consistent with the SBATCH
 # directives above. Effective batch = 64 x 4 x 5 = 1280.
 # LR is auto-scaled in the model: _effective_lr = lr * sqrt(batch*world_size/1024)

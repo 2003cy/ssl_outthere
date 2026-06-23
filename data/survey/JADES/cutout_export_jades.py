@@ -1,6 +1,6 @@
 """Export JADES (GOODS-S + GOODS-N) f150w cutouts -> memmap .npy + slim image-index FITS.
 
-Same on-disk contract as COSMOS/CEERS/OutThere (images/cosmos_2025/cutout_export_npy.py)
+Same on-disk contract as COSMOS/CEERS/OutThere (data/survey/cosmos_2025/cutout_export_npy.py)
 so encoder_image/jwst_dino loads every survey identically. Per filter::
 
     <output-dir>/<filter>/nircam_jades_<filter>_<field>.npy       (N,128,128) float16, MJy/sr
@@ -34,7 +34,7 @@ single field's mosaic+segmap (~17 GB for GOODS-S), not both.
 from __future__ import annotations
 
 '''
-cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/images/JADES
+cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/data/survey/JADES
 
 python cutout_export_jades.py \
   --jades-dir . \

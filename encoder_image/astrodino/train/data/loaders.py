@@ -29,7 +29,7 @@ def _parse_dataset_str(dataset_str: str):
         raise ValueError(f'Unsupported dataset "{name}". Only "jwst" is supported.')
 
     kwargs = {}
-    _JWST_KEYS = {"root", "split", "filter", "extra_returns"}
+    _JWST_KEYS = {"root", "split", "filter", "survey"}
     for token in tokens[1:]:
         key, value = token.split("=", 1)  # maxsplit=1 keeps values that contain "="
         if key not in _JWST_KEYS:
@@ -45,8 +45,6 @@ def make_dataset(
     dataset_str: str,
     transform: Optional[Callable] = None,
     target_transform: Optional[Callable] = None,
-    re_min_pix: Optional[float] = None,
-    re_max_pix: Optional[float] = None,
     **_ignored,
 ) -> JWST:
     """
@@ -57,9 +55,8 @@ def make_dataset(
                           "jwst:split=train:root=/path/to/data:filter=f150w"
         transform:        Image transform passed to the dataset.
         target_transform: Target transform passed to the dataset.
-        re_min_pix:       Min Sérsic effective radius in pixels (from cfg.train).
-        re_max_pix:       Max Sérsic effective radius in pixels (from cfg.train).
-        **_ignored:       Extra kwargs (e.g. `channel`) accepted for call-site compatibility.
+        **_ignored:       Extra kwargs (e.g. `re_min_pix`) accepted for call-site
+                          compatibility; pretraining applies no sample filtering.
     Returns:
         Constructed JWST dataset.
     """
@@ -68,8 +65,6 @@ def make_dataset(
     dataset = JWST(
         transform=transform,
         target_transform=target_transform,
-        re_min_pix=re_min_pix,
-        re_max_pix=re_max_pix,
         **kwargs,
     )
     logger.info("Dataset size: %d samples", len(dataset))

@@ -1,7 +1,7 @@
 """Export OutThere <filter> cutouts -> memmap .npy + slim image-index FITS.
 
-Same on-disk contract as COSMOS/CEERS (images/cosmos_2025/cutout_export_npy.py,
-images/CEERS/cutout_export_ceers.py) so encoder_image/jwst_dino loads every survey
+Same on-disk contract as COSMOS/CEERS (data/survey/cosmos_2025/cutout_export_npy.py,
+data/survey/CEERS/cutout_export_ceers.py) so encoder_image/jwst_dino loads every survey
 identically. Per filter::
 
     <output-dir>/<filter>/niriss_outthere_<filter>_<field>.npy       (N,128,128) float16, MJy/sr @30mas
@@ -36,7 +36,7 @@ convert -> resample -> save shard). reproject is the per-cutout cost.
 from __future__ import annotations
 
 '''
-cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/images/OutThere
+cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/data/survey/OutThere
 
 python cutout_export_outthere.py \
   --imaging-dir imaging \

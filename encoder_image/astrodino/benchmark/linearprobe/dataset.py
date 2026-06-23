@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 sys.path.insert(0, "/u/yacheng/projects/ssl_outthere")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from preprocessing import get_torgb
+from preprocessing import get_stretch
 
 
 class JWSTMorphDataset(Dataset):
@@ -34,7 +34,7 @@ class JWSTMorphDataset(Dataset):
                  balanced: bool = False, samples_per_class: int = -1, delta_threshold: float = 0.5,
                  effective_radius_min: float = None, cfg=None):
         self.crop_size = crop_size
-        self.to_rgb, self.in_chans = get_torgb(cfg)
+        self.stretch, self.in_chans = get_stretch(cfg)
         self.center_crop = transforms.CenterCrop(crop_size)
         self.rng = np.random.default_rng(seed=seed)
         
@@ -149,13 +149,11 @@ class JWSTMorphDataset(Dataset):
         # Load image  (H, W) single band
         img = self._files[file_idx]['image'][local_idx].astype('float32')
 
-        # For 3-channel models repeat before crop so ToRGB3Band gets (3,H,W);
-        # for 1-channel models keep (1,H,W).
-        n = self.in_chans if self.in_chans > 1 else 1
-        img = np.repeat(img[np.newaxis], n, axis=0)     # (C, H, W)
+        # Single-band: (1, H, W).
+        img = img[np.newaxis]                           # (1, H, W)
 
         tensor = self.center_crop(torch.from_numpy(img))
-        tensor = torch.from_numpy(self.to_rgb(tensor.numpy()))  # (C, H, W)
+        tensor = torch.from_numpy(self.stretch(tensor.numpy()))  # (1, H, W)
 
         return tensor, label
     

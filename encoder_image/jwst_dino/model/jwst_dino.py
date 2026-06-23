@@ -11,11 +11,13 @@ everythin, the ViT, head and losses are all vendored under model/.
 """
 
 import math
+import os
 from typing import List
 
 import lightning as L
 import torch
 import torch.nn.functional as F
+import yaml
 from torch.optim import AdamW
 
 from .dino_head import DINOHead
@@ -343,3 +345,44 @@ class JWST_DINO(L.LightningModule):
     def export_teacher_backbone(self) -> dict:
         """State dict in the dinov2 'teacher checkpoint' layout used downstream."""
         return {"teacher": self.teacher_backbone.state_dict()}
+
+
+_DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "..", "jwst_dino.yaml")
+
+
+def load_teacher_backbone(weights_path: str, device="cpu", config_path: str | None = None):
+    """Load the frozen teacher ViT backbone for downstream eval (embeddings, probes).
+
+    Accepts either checkpoint flavor and returns an eval-mode, frozen VisionTransformer
+    whose expected input size is on ``.crop_size`` (call ``net(x)["cls"]`` for the
+    embedding):
+
+      *.ckpt — a Lightning ModelCheckpoint: rebuilt via ``JWST_DINO.load_from_checkpoint``
+          (hyperparameters travel inside the ckpt, so no yaml is needed).
+      *.pth  — the dinov2-style ``{"teacher": state_dict}`` dumped by
+          ``export_teacher_backbone`` (backbone only, portable): the ViT is rebuilt from
+          the training yaml at ``config_path`` (default ``jwst_dino.yaml``) and loaded.
+    """
+    if str(weights_path).endswith(".ckpt"):
+        m = JWST_DINO.load_from_checkpoint(weights_path, map_location=device)
+        net, crop = m.teacher_backbone, m.hparams.global_crops_size
+    else:
+        with open(config_path or _DEFAULT_CONFIG) as f:
+            cfg = yaml.safe_load(f)
+        mc, d = cfg["model"], cfg["data"]
+        crop = d["global_crops_size"]
+        net = VisionTransformer(
+            img_size=crop, patch_size=d["patch_size"], patch_stride=d["patch_stride"],
+            in_chans=mc["in_chans"], embed_dim=mc["embed_dim"], depth=mc["depth"],
+            num_heads=mc["num_heads"], mlp_ratio=mc["mlp_ratio"],
+            num_register_tokens=mc["num_register_tokens"], drop_path_rate=0.0,
+            layerscale_init=mc["layerscale_init"],
+        )
+        sd = torch.load(weights_path, map_location="cpu")
+        net.load_state_dict(sd.get("teacher", sd), strict=False)
+
+    net = net.eval().to(device)
+    for p in net.parameters():
+        p.requires_grad = False
+    net.crop_size = crop
+    return net

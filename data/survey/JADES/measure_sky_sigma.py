@@ -15,7 +15,7 @@ ext 1 (SEGMENTATION, seg==ID), pixel-aligned. JADES is the DEEPEST survey, so ex
 smallest sky sigma of the four (below CEERS ~6.7e-3).
 
 Run:
-    .pixi/envs/default/bin/python images/JADES/measure_sky_sigma.py
+    .pixi/envs/default/bin/python data/survey/JADES/measure_sky_sigma.py
 """
 
 import os

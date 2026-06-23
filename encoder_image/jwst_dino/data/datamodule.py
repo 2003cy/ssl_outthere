@@ -50,7 +50,7 @@ class JWSTDINODataModule(L.LightningDataModule):
             input_size=(side, side), max_num_patches=0.5 * self.n_tokens,
         )
 
-    def _transform(self) -> DataAugmentationJWSTDINO:
+    def _transform(self, verbose: bool = True) -> DataAugmentationJWSTDINO:
         h = self.hparams
         return DataAugmentationJWSTDINO(
             h.local_crops_number,
@@ -59,14 +59,19 @@ class JWSTDINODataModule(L.LightningDataModule):
             center_crop_size=h.center_crop_size,
             noise_w=h.noise_w,
             noise_s_max=h.noise_s_max,
+            verbose=verbose,
         )
 
     def setup(self, stage: str = None) -> None:
         if self.train_dataset is None:
             h = self.hparams
+            # Only rank 0 prints the (identical) augmentation + dataset banners; build the
+            # shared transform once (train and all per-survey val use the same aug).
+            verbose = self.trainer.is_global_zero if self.trainer is not None else True
+            transform = self._transform(verbose=verbose)
             # Train: one combined dataset over all surveys.
             self.train_dataset = JWST(split="train", root=h.root, filter=h.filter,
-                                      survey=h.survey, transform=self._transform())
+                                      survey=h.survey, transform=transform, verbose=verbose)
             # Val: one dataset PER survey (a multi-dataloader val) so each survey's val
             # loss is logged separately as val_<survey>_<k>. The combined "total" is NOT
             # logged by the model — it is derived downstream (EpochPrinter / metrics plot)
@@ -76,7 +81,7 @@ class JWSTDINODataModule(L.LightningDataModule):
             self.val_surveys = [h.survey] if isinstance(h.survey, str) else list(h.survey)
             self.val_datasets = [
                 JWST(split="val", root=h.root, filter=h.filter, survey=s,
-                     transform=self._transform())
+                     transform=transform, verbose=verbose)
                 for s in self.val_surveys
             ]
 

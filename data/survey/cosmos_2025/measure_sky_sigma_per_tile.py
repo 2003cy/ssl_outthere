@@ -14,7 +14,7 @@ COSMOS: 20 per-tile mosaics (ext 0, MJy/sr, 30 mas) + per-tile segmaps (ext 0, u
 via BZERO). Segmap is pixel-aligned to its mosaic.
 
 Run:
-    .pixi/envs/default/bin/python images/cosmos_2025/measure_sky_sigma_per_tile.py
+    .pixi/envs/default/bin/python data/survey/cosmos_2025/measure_sky_sigma_per_tile.py
 """
 
 import glob

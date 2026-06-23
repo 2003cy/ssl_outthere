@@ -37,7 +37,7 @@ class MASpectrumDataModule(L.LightningDataModule):
     """DataModule for single-band (or multi-band) spectrum data.
     
     Args:
-        h5_path: Path to HDF5 file (e.g., images/OUTTHERE/spectrum/f115w.h5)
+        h5_path: Path to HDF5 file (e.g., data/survey/OUTTHERE/spectrum/f115w.h5)
         batch_size: Batch size for training/validation
         num_workers: Number of workers for DataLoader
         train_val_split: Fraction of data for training (rest goes to validation)

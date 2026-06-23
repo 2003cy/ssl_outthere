@@ -1,6 +1,6 @@
 """Export CEERS f150w cutouts -> memmap-friendly .npy + a slim image-index FITS.
 
-Mirrors images/cosmos_2025/cutout_export_npy.py (same on-disk contract), so the
+Mirrors data/survey/cosmos_2025/cutout_export_npy.py (same on-disk contract), so the
 JWST dataset (encoder_image/jwst_dino/data/dataset.py) loads COSMOS and CEERS
 identically. Per filter the layout is::
 
@@ -31,7 +31,7 @@ every worker attaching the same single physical copy.
 from __future__ import annotations
 
 '''
-cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/images/CEERS
+cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/data/survey/CEERS
 
 pixi shell  # (default env)
 

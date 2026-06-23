@@ -6,7 +6,7 @@ transform the model input (would be label leakage).
 
 Source file
 -----------
-`DJA_spectra_v4.5.fits` (built by images/DJA/build_dja_spectra_catalog.py):
+`DJA_spectra_v4.5.fits` (built by data/survey/DJA/build_dja_spectra_catalog.py):
 
     HDU 'CATALOG' : one row per PRISM object, all CSV metadata columns plus
                     vector columns flux/err/full_err/valid_spec, each (473,)

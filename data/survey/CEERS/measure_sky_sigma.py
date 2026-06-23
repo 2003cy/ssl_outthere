@@ -13,7 +13,7 @@ CEERS: one mosaic (ext 1, MJy/sr, 30 mas) + one segmap (ext 0, int32, seg==NUMBE
 pixel-aligned. A single pseudo-tile 'EGS' (the EGS field).
 
 Run:
-    .pixi/envs/default/bin/python images/CEERS/measure_sky_sigma.py
+    .pixi/envs/default/bin/python data/survey/CEERS/measure_sky_sigma.py
 """
 
 import os

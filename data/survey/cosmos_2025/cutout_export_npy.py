@@ -25,7 +25,7 @@ same single copy. This lets the worker count exceed the tile count.
 from __future__ import annotations
 
 '''
-cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/images/cosmos_2025
+cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/data/survey/cosmos_2025
 
 pixi shell
 

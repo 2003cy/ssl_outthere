@@ -15,7 +15,7 @@ Per field: mosaic ``<field>-f150wn-clear_drc_sci.fits`` (10nJy/pix) + shared IR 
 ``<field>-ir_seg.fits`` (seg==NUMBER). Tile alias = field name.
 
 Run:
-    .pixi/envs/default/bin/python images/OutThere/measure_sky_sigma.py
+    .pixi/envs/default/bin/python data/survey/OutThere/measure_sky_sigma.py
 """
 
 import glob
