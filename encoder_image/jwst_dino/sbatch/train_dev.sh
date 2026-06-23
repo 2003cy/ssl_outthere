@@ -10,9 +10,7 @@
 #SBATCH --mail-type=none
 #SBATCH --mail-user=yacheng@mpia.de
 
-# Quick dev trial on the gpudev partition (1 node x 4 A100, 10 min). Overrides the
-# schedule to tiny values so train + val + teacher-export + checkpoint all fire
-# inside the time limit — this tests the pipeline, not convergence.
+# Dev trial on the gpudev partition (1 node x 4 A100, 10 min walltime). 
 
 module purge
 module load cuda/12.6
@@ -30,6 +28,7 @@ srun $PYTHON trainer.py fit \
     --config="$config" \
     --trainer.devices=4 \
     --trainer.num_nodes=1 \
-    --trainer.max_epochs=4 \
-    --trainer.limit_train_batches=50 \
-    --trainer.check_val_every_n_epoch=2
+    --trainer.max_epochs=50 \
+    --trainer.limit_train_batches=20 \
+    --trainer.check_val_every_n_epoch=1 \
+    --trainer.logger.init_args.name=jwst_dino_ps6_st3_dev

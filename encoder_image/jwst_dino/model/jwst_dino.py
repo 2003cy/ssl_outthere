@@ -238,12 +238,24 @@ class JWST_DINO(L.LightningModule):
                         on_step=True, on_epoch=False, batch_size=B)
         return out["loss"]
 
-    def validation_step(self, batch: dict, batch_idx: int = 0):
+    def validation_step(self, batch: dict, batch_idx: int = 0, dataloader_idx: int = 0):
         B = batch["collated_global_crops"].shape[0] // 2
         _, _, _, t_temp, _ = self._schedule_values()
         out = self._compute_losses(batch, t_temp, training=False)
-        self.log_dict({f"val_{k}": v for k, v in out.items()},
-                        prog_bar=True, on_step=False, on_epoch=True, sync_dist=True, batch_size=B)
+
+        # Per-survey val only: log val_<survey>_<k>. Each name appears under a single
+        # dataloader_idx, so there is no cross-dataloader collision, and being logged in
+        # validation_step (not on_validation_epoch_end) it lands in callback_metrics before
+        # the EpochPrinter/PlotMetrics callbacks run. The combined "total" is derived from
+        # these per-survey curves downstream, NOT logged here (see datamodule.setup note).
+        surveys = getattr(self.trainer.datamodule, "val_surveys", None)
+        if surveys is not None and dataloader_idx < len(surveys):
+            tag = f"{surveys[dataloader_idx]}_"
+        else:
+            tag = ""  # single-survey / no datamodule: plain val_<k>
+        self.log_dict({f"val_{tag}{k}": v for k, v in out.items()},
+                        on_step=False, on_epoch=True, sync_dist=True,
+                        batch_size=B, add_dataloader_idx=False)
         return out["loss"]
 
     @property

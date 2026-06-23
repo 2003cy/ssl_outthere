@@ -51,6 +51,9 @@ class JWST(Dataset):
         surveys = [survey] if isinstance(survey, str) else list(survey)
         rel_paths, local_idxs, selected = [], [], []
         offset = 0  # running row offset into the concatenated arrays
+        
+        #given a list of surveys, iterate over all of them 
+        #train/val split within each survey, then concatenate all of them together
         for s in surveys:
             index = Table.read(os.path.join(self.root, f"image_index_{s}_{filter}.fits"))
             rel_paths.append(np.asarray(index["rel_path"]).astype(str))

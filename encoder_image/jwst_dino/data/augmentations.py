@@ -23,8 +23,14 @@ from torchvision import transforms
 # (finite & nonzero; edge/seam gaps are exact-0, not NaN, so seams are rejected)
 # and source mask (segmap == 0; catalogued sources removed) — then median of the
 # sigma-clipped background std.
-#   cosmos — COSMOS-Web F150W per tile (remarkably uniform, 2.20e-2 .. 2.37e-2).
-#   ceers  — single 'fullceers' EGS mosaic (no sub-tiles), ~3.4x deeper.
+#   cosmos   — COSMOS-Web F150W per tile (remarkably uniform, 2.20e-2 .. 2.37e-2).
+#   ceers    — single 'fullceers' EGS mosaic (no sub-tiles), ~3.4x deeper.
+#   outthere — NIRISS per field, measured in the 30mas cutout domain (convert + resample,
+#              images/OutThere/measure_sky_sigma.py); ~10x per-field scatter. Bad fields
+#              are excluded at export (alias 'dor' star field, crt-00 saturated star).
+#   jades    — NIRCam GOODS-S/N (MJy/sr @ 30mas, no conversion), the DEEPEST survey;
+#              two fields 'gds' (GOODS-South, deepest) / 'gdn' (GOODS-North),
+#              images/JADES/measure_sky_sigma.py.
 SKY_SIGMA = {
     "cosmos": {
         "A1": 2.2847e-02, "A2": 2.2922e-02, "A3": 2.3431e-02, "A4": 2.3138e-02,
@@ -36,6 +42,25 @@ SKY_SIGMA = {
     },
     "ceers": {
         "EGS": 6.7102e-03,
+    },
+    "outthere": {
+        "boo-02": 3.1720e-03, "boo-03": 6.5396e-03, "boo-05": 1.9721e-03,
+        "boo-08": 5.5361e-03, "boo-11": 6.9912e-03, "com-02": 3.1032e-03,
+        "crb-00": 5.0353e-03, "crv-00": 4.3944e-03, "cvn-00": 6.1262e-03,
+        "gru-00": 1.5206e-03, "hya-00": 4.5316e-03, "leo-00": 6.2018e-03,
+        "leo-05": 3.6345e-03, "leo-06": 3.8594e-03, "leo-08": 4.2076e-03,
+        "leo-13": 3.3172e-03, "leo-17": 1.4179e-02, "lib-02": 4.9963e-03,
+        "lmi-01": 7.6227e-03, "sex-01": 5.0400e-03, "sex-02": 6.2972e-03,
+        "sex-03": 4.0877e-03, "sex-05": 8.3969e-03, "sex-06": 8.5503e-03,
+        "sex-07": 8.5630e-03, "sex-08": 8.5668e-03, "sex-09": 3.7317e-03,
+        "sex-10": 9.4909e-03, "sex-16": 2.6725e-03, "sex-28": 7.5701e-03,
+        "sex-34": 5.8232e-03, "uma-00": 4.2535e-03, "uma-01": 1.0065e-02,
+        "uma-02": 2.0340e-03, "uma-03": 7.8835e-03, "uma-05": 2.8065e-03,
+        "uma-08": 6.1098e-03, "vir-04": 7.1774e-03, "vir-08": 5.0702e-03,
+        "vir-14": 3.6501e-03, "vir-15": 3.9340e-03,
+    },
+    "jades": {
+        "gds": 2.9846e-03, "gdn": 6.1683e-03,
     },
 }
 

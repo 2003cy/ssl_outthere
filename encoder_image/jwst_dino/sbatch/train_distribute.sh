@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #SBATCH -t 24:00:00
-#SBATCH --nodes=4
+#SBATCH --nodes=5
 #SBATCH --constraint="gpu"
 #SBATCH --gres=gpu:a100:4        # 4 GPUs per node
 #SBATCH --tasks-per-node=4       # 1 task per GPU (Lightning maps each to a rank)
@@ -14,9 +14,9 @@
 # Lightning's SLURMEnvironment auto-detects SLURM_PROCID / NTASKS / NODELIST and
 # wires up the process group — no custom distributed.py needed.
 # Keep devices = GPUs-per-node and num_nodes = #nodes consistent with the SBATCH
-# directives above. Effective batch = 64 x 4 x 4 = 1024.
+# directives above. Effective batch = 64 x 4 x 5 = 1280.
 # LR is auto-scaled in the model: _effective_lr = lr * sqrt(batch*world_size/1024)
-#   = lr * sqrt(64*16/1024) = lr * 1.0  (world_size = 4 GPU x 4 nodes = 16)
+#   = lr * sqrt(64*20/1024) = lr * 1.118  (world_size = 4 GPU x 5 nodes = 20)
 
 module purge
 module load cuda/12.6
@@ -33,4 +33,4 @@ cd /u/yacheng/ssl_outthere/encoder_image/jwst_dino
 srun $PYTHON trainer.py fit \
     --config="$config" \
     --trainer.devices=4 \
-    --trainer.num_nodes=4
+    --trainer.num_nodes=5

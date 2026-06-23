@@ -64,10 +64,21 @@ class JWSTDINODataModule(L.LightningDataModule):
     def setup(self, stage: str = None) -> None:
         if self.train_dataset is None:
             h = self.hparams
-            common = dict(root=h.root, filter=h.filter, survey=h.survey,
-                          transform=self._transform())
-            self.train_dataset = JWST(split="train", **common)
-            self.val_dataset = JWST(split="val", **common)
+            # Train: one combined dataset over all surveys.
+            self.train_dataset = JWST(split="train", root=h.root, filter=h.filter,
+                                      survey=h.survey, transform=self._transform())
+            # Val: one dataset PER survey (a multi-dataloader val) so each survey's val
+            # loss is logged separately as val_<survey>_<k>. The combined "total" is NOT
+            # logged by the model — it is derived downstream (EpochPrinter / metrics plot)
+            # as the mean of the per-survey curves, because logging one shared `val_loss`
+            # name across the per-survey dataloaders is illegal in Lightning, and logging
+            # it in on_validation_epoch_end runs *after* those callback consumers.
+            self.val_surveys = [h.survey] if isinstance(h.survey, str) else list(h.survey)
+            self.val_datasets = [
+                JWST(split="val", root=h.root, filter=h.filter, survey=s,
+                     transform=self._transform())
+                for s in self.val_surveys
+            ]
 
     def _collate(self):
         return partial(
@@ -94,5 +105,7 @@ class JWSTDINODataModule(L.LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         return self._loader(self.train_dataset, shuffle=True, drop_last=True)
 
-    def val_dataloader(self) -> DataLoader:
-        return self._loader(self.val_dataset, shuffle=False, drop_last=True)
+    def val_dataloader(self) -> list[DataLoader]:
+        # One loader per survey (order matches self.val_surveys). drop_last=False so
+        # small surveys (e.g. CEERS val) aren't mostly discarded.
+        return [self._loader(ds, shuffle=False, drop_last=False) for ds in self.val_datasets]
