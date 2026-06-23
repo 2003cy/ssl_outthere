@@ -208,7 +208,7 @@ class KoLeoLoss(nn.Module):
 
     def forward(self, student_output, eps=1e-8):
         """student_output: (B, D) backbone output of the student."""
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             student_output = F.normalize(student_output, eps=eps, p=2, dim=-1)
             I = self.pairwise_NNs_inner(student_output)
             distances = self.pdist(student_output, student_output[I])

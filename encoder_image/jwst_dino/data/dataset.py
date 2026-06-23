@@ -1,116 +1,95 @@
-"""JWST image dataset backed by per-tile ``.npy`` shards + a slim index FITS.
+"""JWST image dataset: per-tile ``.npy`` shards indexed by a slim FITS table.
 
-Copied unchanged from encoder_image/astrodino/train/data/dataset.py — it is
-already self-contained (no dinov2 dependency).
+Layout under ``root`` (produced by images/cosmos_2025/cutout_export_npy.py)::
 
-Produced by ``images/cosmos_2025/cutout_export_npy.py``. Under ``root`` lives::
+    image_index_<survey>_<filter>.fits             one row per cutout
+    <filter>/nircam_<survey>_<filter>_<tile>.npy   (N, H, W) float16, MJy/sr
 
-    image_index_<survey>_<filter>.fits        one row per cutout
-    <filter>/nircam_<survey>_<filter>_<tile>.npy   (N, H, W) float16  (MJy/sr)
+Each index row gives ``rel_path`` + ``local_idx``: cutout ``i`` is row
+``local_idx[i]`` of the shard at ``root/rel_path[i]``. Shards are memmapped per
+worker, so pixels are read only in ``__getitem__``.
 
-The index columns ``rel_path`` + ``local_idx`` locate every cutout: row ``i`` of
-the index points at row ``local_idx[i]`` of the array at ``root/rel_path[i]``.
-Arrays are memmapped lazily (per worker) so nothing is read until ``__getitem__``.
-
-Pretraining uses *every* cutout in the index — no filtering. The catalogue is
-shuffled once (seed 42) and split 90/5/5 into train/val/test. Training is
-single-channel (image only); ``val`` returns the image as its own target.
+Every cutout is used (no filtering). Multiple surveys can be combined by passing a
+list (e.g. ``["cosmos", "ceers"]``); each survey's index is shuffled once (fixed
+seed) and sliced 90/5/5 *independently*, then the per-survey slices are concatenated
+— so every split holds the same survey proportions and no survey can land wholly in
+one split. The per-survey sky_sigma is recovered downstream from the tile alias in
+each row's rel_path (parse_tile), so no survey label needs to flow through here.
 """
 
-import logging
 import os
-from enum import Enum
-from typing import Any, Callable, Optional, Tuple
+from typing import Callable, Optional, Sequence, Union
 
 import numpy as np
 import torch
 from astropy.table import Table
-from torchvision.datasets import VisionDataset
+from torch.utils.data import Dataset
 
-logger = logging.getLogger("jwst_dino")
-
-# Reproducible 90 / 5 / 5 train-val-test split fractions.
-_SPLIT_FRACTIONS = {
-    "train": (0.00, 0.90),
-    "val":   (0.90, 0.95),
-    "test":  (0.95, 1.00),
-}
+# (start, end) fractions of the shuffled index for each split.
+SPLITS = {"train": (0.00, 0.90), "val": (0.90, 0.95), "test": (0.95, 1.00)}
+SPLIT_SEED = 42
 
 
-class _Split(Enum):
-    TRAIN = "train"
-    VAL   = "val"
-    TEST  = "test"
+def parse_tile(rel_path: str) -> str:
+    """Tile alias from a rel_path, e.g. 'nircam_cosmos_f150w_A1.npy' -> 'A1'."""
+    return os.path.basename(rel_path).removesuffix(".npy").rsplit("_", 1)[-1]
 
 
-class JWST(VisionDataset):
-    """JWST cutouts read from ``.npy`` shards via a slim image-index FITS."""
-
-    Split = _Split
-
+class JWST(Dataset):
     def __init__(
         self,
-        *,
         split: str,
         root: str,
         filter: str = "f150w",
-        survey: str = "cosmos",
-        transforms: Optional[Callable] = None,
+        survey: Union[str, Sequence[str]] = "cosmos",
         transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
-    ) -> None:
-        super().__init__(root, transforms, transform, target_transform)
-        self._split = split
+    ):
+        self.root = os.path.expandvars(os.path.expanduser(root))
+        self.split = split
+        self.transform = transform
 
-        index_path = os.path.join(root, f"image_index_{survey}_{filter}.fits")
-        index = Table.read(index_path)
-        self._rel_path = np.asarray(index["rel_path"]).astype(str)
-        self._local_idx = np.asarray(index["local_idx"]).astype(np.int64)
-        self._indices = self._assign_split(np.arange(len(index)), split)
-        self._mmaps: dict[str, np.ndarray] = {}  # rel_path -> memmap, opened per worker
+        surveys = [survey] if isinstance(survey, str) else list(survey)
+        rel_paths, local_idxs, selected = [], [], []
+        offset = 0  # running row offset into the concatenated arrays
+        for s in surveys:
+            index = Table.read(os.path.join(self.root, f"image_index_{s}_{filter}.fits"))
+            rel_paths.append(np.asarray(index["rel_path"]).astype(str))
+            local_idxs.append(np.asarray(index["local_idx"]).astype(np.int64))
+            sel = self._split_indices(len(index), split)  # split within this survey
+            selected.append(sel + offset)
+            offset += len(index)
+            print(f"JWST [{split}] {s} — {len(sel)} / {len(index)} cutouts ({filter})")
 
-        logger.info(
-            "JWST [%s] — %d / %d cutouts (%s)",
-            split, len(self._indices), len(index), filter,
-        )
+        self.rel_path = np.concatenate(rel_paths)
+        self.local_idx = np.concatenate(local_idxs)
+        self.indices = np.concatenate(selected)
+        self.shards: dict[str, np.ndarray] = {}  # rel_path -> memmap, opened per worker
+
+        print(f"JWST [{split}] — {len(self.indices)} / {offset} cutouts total "
+              f"({', '.join(surveys)}; {filter})")
 
     @staticmethod
-    def _assign_split(indices: np.ndarray, split: str) -> np.ndarray:
-        """Shuffle with a fixed seed and slice out the requested split."""
-        if split not in _SPLIT_FRACTIONS:
-            raise ValueError(f"Unknown split '{split}'. Choose from {list(_SPLIT_FRACTIONS)}")
-        shuffled = np.random.default_rng(seed=42).permutation(indices)
-        lo, hi = _SPLIT_FRACTIONS[split]
-        n = len(shuffled)
-        return shuffled[int(lo * n): int(hi * n)]
+    def _split_indices(n: int, split: str) -> np.ndarray:
+        order = np.random.default_rng(SPLIT_SEED).permutation(n)
+        lo, hi = SPLITS[split]
+        return order[int(lo * n): int(hi * n)]
 
     def _shard(self, rel_path: str) -> np.ndarray:
-        """Memmap a tile shard, caching the handle for this worker process."""
-        arr = self._mmaps.get(rel_path)
-        if arr is None:
-            arr = np.load(os.path.join(self.root, rel_path), mmap_mode="r")
-            self._mmaps[rel_path] = arr
-        return arr
-
-    @property
-    def split(self) -> str:
-        return self._split
+        if rel_path not in self.shards:
+            self.shards[rel_path] = np.load(os.path.join(self.root, rel_path), mmap_mode="r")
+        return self.shards[rel_path]
 
     def __len__(self) -> int:
-        return len(self._indices)
+        return len(self.indices)
 
-    def __getitem__(self, index: int) -> Tuple[Any, Any]:
-        row = self._indices[index]
-        cutout = self._shard(self._rel_path[row])[self._local_idx[row]]  # (H, W) float16
+    def __getitem__(self, i: int):
+        row = self.indices[i]
+        cutout = self._shard(self.rel_path[row])[self.local_idx[row]]  # (H, W) float16
 
-        # (H, W) -> (1, H, W) float32; zero out empty (NaN/inf) pixels.
-        img = np.nan_to_num(cutout.astype(np.float32), copy=False)
-        image = torch.from_numpy(img[np.newaxis])
+        # (H, W) -> (1, H, W) float32; empty (NaN/inf) pixels -> 0.
+        image = torch.from_numpy(np.nan_to_num(cutout.astype(np.float32))[None])
+        if self.transform is not None:
+            image = self.transform(image, tile=parse_tile(self.rel_path[row]))
 
-        target = None
-        if self.transforms is not None:
-            image, target = self.transforms(image, target)
-
-        if self._split == _Split.VAL.value:
-            target = image
-        return image, target
+        # Target is unused (collate keeps only the crops); kept for the (x, y) contract.
+        return image, ()

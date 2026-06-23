@@ -6,7 +6,7 @@ auto-injected DistributedSampler (shuffle=True), so no custom sampler is needed.
 """
 
 from functools import partial
-from typing import Sequence
+from typing import Sequence, Union
 
 import lightning as L
 import torch
@@ -22,7 +22,7 @@ class JWSTDINODataModule(L.LightningDataModule):
         self,
         root: str,
         filter: str = "f150w",
-        survey: str = "cosmos",
+        survey: Union[str, Sequence[str]] = "cosmos",
         batch_size: int = 96,
         num_workers: int = 16,
         # crop / patch geometry (linked to the model via LightningCLI)
@@ -32,6 +32,9 @@ class JWSTDINODataModule(L.LightningDataModule):
         local_crops_size: int = 36,
         local_crops_number: int = 8,
         center_crop_size: int = 100,
+        # noise augmentation (per-tile relative half-normal noise)
+        noise_w: float = 1.5,
+        noise_s_max: float | None = None,
         # iBOT masking
         ibot_mask_ratio_min_max: Sequence[float] = (0.1, 0.3),
         ibot_mask_sample_probability: float = 0.5,
@@ -54,13 +57,15 @@ class JWSTDINODataModule(L.LightningDataModule):
             global_crops_size=h.global_crops_size,
             local_crops_size=h.local_crops_size,
             center_crop_size=h.center_crop_size,
+            noise_w=h.noise_w,
+            noise_s_max=h.noise_s_max,
         )
 
     def setup(self, stage: str = None) -> None:
         if self.train_dataset is None:
             h = self.hparams
             common = dict(root=h.root, filter=h.filter, survey=h.survey,
-                          transform=self._transform(), target_transform=lambda _: ())
+                          transform=self._transform())
             self.train_dataset = JWST(split="train", **common)
             self.val_dataset = JWST(split="val", **common)
 

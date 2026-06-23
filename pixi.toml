@@ -28,6 +28,9 @@ packaging   = ">=20.0,<25.0"
 fsspec      = ">=2022.5.0,<2026.0"
 numpy       = "==1.26.4"
 scipy       = ">=1.10"
+# cap mpmath so the conda solve stays compatible with the sympy (<1.4 mpmath)
+# pulled by torch's pypi deps (torch 2.5.1 -> sympy 1.13.1 -> mpmath>=1.1,<1.4)
+mpmath      = ">=1.1.0,<1.4"
 astropy     = ">=5.0"
 scikit-image = ">=0.19"
 scikit-learn = ">=1.0"
@@ -45,13 +48,11 @@ env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH" }
 
 # ---------------------------------------------------------------------------
 # PyPI dependencies (shared, CUDA-version-agnostic)
+# NOTE: lightning / torchmetrics are NOT here — they are pinned per-feature
+# because they are torch-version-coupled (lightning 2.5 is the first release to
+# officially support torch 2.5; 2.3.3 only fits the torch-2.0.1 meta/h100 envs).
 # ---------------------------------------------------------------------------
 [pypi-dependencies]
-torchmetrics = "==0.10.3"
-
-# Training framework
-lightning    = {version = "==2.3.3", extras = ["extra"]}
-
 # Data / cloud
 boto3          = ">=1.28.17"
 datasets       = ">=2.14"
@@ -81,42 +82,66 @@ shap = ">=0.41.0"
 ssl_outthere = {path = ".", editable = true}
 
 # ---------------------------------------------------------------------------
-# Tasks
+# Global tasks (env-agnostic). DINOv2-specific build tasks live under the
+# `meta` / `h100` features, since only astrodino depends on Meta's dinov2.
 # ---------------------------------------------------------------------------
 [tasks]
-# DINOv2 must be installed without its deps to avoid torch/torchvision conflicts
-install-dinov2 = "pip install --no-deps git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069"
-
-# Apply project-specific patches to the installed dinov2 (idempotent)
-patch-dinov2 = {cmd = "python encoder_image/astrodino/patch_dinov2.py", depends-on = ["install-dinov2"]}
-
-# cuml-cu11 is a pre-built wheel only available from the NVIDIA PyPI index;
-# pixi/uv cannot resolve it without attempting a source build, so we install it directly.
-install-cuml = "pip install --extra-index-url https://pypi.nvidia.com cuml-cu11"
-
-# Register the pixi env as a Jupyter kernel
+# Register the (modern, default) pixi env as a Jupyter kernel
 register-kernel = "python -m ipykernel install --user --name ssl_outthere --display-name 'ssl_outthere (pixi)'"
 
-# Full environment bootstrap: resolve pixi deps, then layer in extras
-bootstrap = {depends-on = ["patch-dinov2", "register-kernel"]}
-#"install-cuml",
-
 # ---------------------------------------------------------------------------
-# cu117 feature — image encoder / dinov2 (default + dev environments)
+# meta feature — Meta's DINOv2 / astrodino ONLY (cu117, torch 2.0.1, A100/sm80).
+# Pinned to torch 2.0.1 because dinov2 -> xformers==0.0.20 forces it. The H100
+# (sm90) flavor of the same code is the `h100` feature below.
 # ---------------------------------------------------------------------------
-[feature.cu117.pypi-options]
+[feature.meta.pypi-options]
 extra-index-urls = ["https://download.pytorch.org/whl/cu117"]
 
-[feature.cu117.pypi-dependencies]
+[feature.meta.pypi-dependencies]
 torch       = "==2.0.1+cu117"
 torchvision = "==0.15.2+cu117"
+# Training framework (torch-2.0.1-era versions)
+lightning    = {version = "==2.3.3", extras = ["extra"]}
+torchmetrics = "==0.10.3"
 # DINOv2 runtime dependencies
 fvcore      = ">=0.1.5"
 iopath      = ">=0.1.9"
 xformers    = "==0.0.20"
 
+[feature.meta.tasks]
+# DINOv2 must be installed without its deps to avoid torch/torchvision conflicts
+install-dinov2 = "pip install --no-deps git+https://github.com/facebookresearch/dinov2.git@2302b6bf46953431b969155307b9bed152754069"
+# Apply project-specific patches to the installed dinov2 (idempotent)
+patch-dinov2 = {cmd = "python encoder_image/astrodino/patch_dinov2.py", depends-on = ["install-dinov2"]}
+# cuml-cu11 is a pre-built wheel only available from the NVIDIA PyPI index;
+# pixi/uv cannot resolve it without attempting a source build, so we install it directly.
+install-cuml = "pip install --extra-index-url https://pypi.nvidia.com cuml-cu11"
+# Register the meta env as a Jupyter kernel
+register-kernel = "python -m ipykernel install --user --name ssl_meta --display-name 'ssl_outthere meta/astrodino (pixi)'"
+# Full meta environment bootstrap
+bootstrap = {depends-on = ["patch-dinov2", "register-kernel"]}
+
 # ---------------------------------------------------------------------------
-# H100 feature — cu118 for sm_90 support, includes dinov2 deps
+# modern feature — everything EXCEPT astrodino (jwst_dino, jwst_jepa,
+# encoder_spectrum, data/eval scripts ...). torch 2.5.1 + cu124 has native
+# flash / mem-efficient SDPA on BOTH sm80 (A100) and sm90 (H100), so a single
+# wheel runs on both node types and there is no need for the explicit-softmax /
+# unfold workarounds. No dinov2 / xformers.
+# ---------------------------------------------------------------------------
+[feature.modern.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu124"]
+
+[feature.modern.pypi-dependencies]
+torch       = "==2.5.1+cu124"
+torchvision = "==0.20.1+cu124"
+# Training framework (lightning 2.5 is the first release to embrace torch 2.5)
+lightning    = {version = ">=2.5,<2.6", extras = ["extra"]}
+torchmetrics = ">=1.4"
+matplotlib  = ">=3.5"
+h5py        = ">=3.0"
+
+# ---------------------------------------------------------------------------
+# H100 feature — cu118 for sm_90 support, includes dinov2 deps (astrodino/meta)
 # ---------------------------------------------------------------------------
 [feature.h100.pypi-options]
 extra-index-urls = ["https://download.pytorch.org/whl/cu118"]
@@ -131,6 +156,9 @@ libstdcxx-ng  = ">=15.2.0,<16"
 [feature.h100.pypi-dependencies]
 torch         = "==2.0.1+cu118"
 torchvision   = "==0.15.2+cu118"
+# Training framework (torch-2.0.1-era versions)
+lightning     = {version = "==2.3.3", extras = ["extra"]}
+torchmetrics  = "==0.10.3"
 matplotlib    = ">=3.5"
 h5py          = ">=3.0"
 # DINOv2 runtime dependencies (cu118 build of xformers matches torch 2.0.1+cu118)
@@ -160,13 +188,17 @@ black   = ">=23.0"
 isort   = ">=5.0"
 
 [environments]
-default = {features = ["cu117"],       solve-group = "default"}
-dev     = {features = ["cu117", "dev"], solve-group = "default"}
-h100    = {features = ["h100"],         solve-group = "h100"}
+# default = modern torch 2.5.1+cu124, for everything except astrodino (A100 & H100)
+default = {features = ["modern"],        solve-group = "modern"}
+dev     = {features = ["modern", "dev"], solve-group = "modern"}
+# meta / h100 = Meta's dinov2 == astrodino only (pinned torch 2.0.1)
+meta    = {features = ["meta"],          solve-group = "meta"}
+h100    = {features = ["h100"],          solve-group = "h100"}
 
 
-#pixi install               # set up the environment
-#pixi run bootstrap         # install dinov2 (--no-deps) + cuml-cu11
-#pixi run -e dev pytest     # run tests in dev environment
-#pixi run register-kernel             # register the default pixi env as a Jupyter kernel
-#pixi run -e h100 register-kernel     # register the h100 pixi env as a Jupyter kernel
+#pixi install                          # set up the environments
+#pixi run register-kernel              # register the default (modern) env as a Jupyter kernel
+#pixi run -e dev pytest                # run tests in the modern dev environment
+#pixi run -e meta bootstrap            # astrodino: install dinov2 (--no-deps) + register kernel
+#pixi run -e meta install-cuml         # astrodino: install cuml-cu11 (RAPIDS) if needed
+#pixi run -e h100 bootstrap            # astrodino on H100: install dinov2 + register kernel

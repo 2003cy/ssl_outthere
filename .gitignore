@@ -4,22 +4,10 @@ __pycache__/
 .DS_Store
 .vscode/
 paper/
-AstroCLIP
-A_ssl-legacysurvey/
-encoder_spectrum/ma_specformer/outputs
-encoder_spectrum/LowResPT/outputs
+
+# ignore model outputs
+**/outputs/**
 encoder_image/astrodino/model
-encoder_fusion/outputs
-!encoder_image/astrodino/model/check_train_metric.ipynb
-
-images/north
-images/south
-images/south-train
-images/jwst
-images/cosmos2025
-images/galaxy_zoo
-
-!images/jwst/check_file.ipynb
 
 !**/.gitkeep
 *.log
