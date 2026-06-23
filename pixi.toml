@@ -140,6 +140,9 @@ torchmetrics = ">=1.4"
 matplotlib  = ">=3.5"
 h5py        = ">=3.0"
 
+[feature.modern.dependencies]
+reproject = ">=0.20.0,<0.21"
+
 # ---------------------------------------------------------------------------
 # H100 feature — cu118 for sm_90 support, includes dinov2 deps (astrodino/meta)
 # ---------------------------------------------------------------------------
