@@ -1,13 +1,13 @@
 """JWST_DINO — a self-contained Lightning re-implementation of DINOv2 pre-training.
 
-Algorithm is faithful to DINOv2 (student/teacher EMA + DINO CLS loss + iBOT patch
+DINOv2 (student/teacher EMA + DINO CLS loss + iBOT patch
 loss + KoLeo, with teacher centering) + image augmentation dedicated to jwst imaging,
 the infrastructure is pyLightning:
 DDP, bf16-mixed (no GradScaler), and manual optimization so the five DINO
 schedules (lr / wd / teacher momentum / teacher temp / last-layer lr), the EMA,
 per-submodule grad clipping and the last-layer freeze are all explicit.
 
-everythin, the ViT, head and losses are all vendored under model/.
+everything, the ViT, head and losses are all vendored under model/.
 """
 
 import math
@@ -24,6 +24,7 @@ from .dino_head import DINOHead
 from .losses import DINOLoss, KoLeoLoss, iBOTPatchLoss
 from .vision_transformer import VisionTransformer
 
+_DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "..", "jwst_dino.yaml")
 
 def cosine_sched(step, total, base, final, warmup=0, freeze=0, start=0.0):
     """One closed-form schedule that reproduces every DINOv2 cosine curve.
@@ -38,7 +39,8 @@ def cosine_sched(step, total, base, final, warmup=0, freeze=0, start=0.0):
     progress = (step - freeze - warmup) / max(1, total - freeze - warmup)
     return final + 0.5 * (base - final) * (1.0 + math.cos(math.pi * progress))
 
-
+# ── JWST_DINO LightningModule ───────────────────────────────────────────────
+#the main model class, wrapper for everythin
 class JWST_DINO(L.LightningModule):
     def __init__(
         self,
@@ -192,6 +194,7 @@ class JWST_DINO(L.LightningModule):
         # ── KoLeo on the two student global CLS embeddings (pre-head) ──
         koleo = sum(self.koleo_loss(p) for p in s_glob_cls.chunk(n_global))
 
+        #final loss, weighted sum
         total = (
             h.dino_loss_weight * (dino_global + dino_local)
             + h.ibot_loss_weight * ibot
@@ -215,8 +218,17 @@ class JWST_DINO(L.LightningModule):
             return self.ibot_patch_loss.softmax_center_teacher(x, temp).squeeze(0)
         return F.softmax((x - self.ibot_patch_loss.center) / temp, dim=-1).squeeze(0)
 
+    @torch.no_grad()
+    def _ema_update(self, m: float):
+        #loop over student/teacher backbone and head parameters in the same order, update teacher
+        for ps, pt in zip(self.student_backbone.parameters(), self.teacher_backbone.parameters()):
+            pt.mul_(m).add_(ps.detach(), alpha=1 - m)
+        for ps, pt in zip(self.student_dino_head.parameters(), self.teacher_dino_head.parameters()):
+            pt.mul_(m).add_(ps.detach(), alpha=1 - m)
+
     # ── training ────────────────────────────────────────────────────────────────
     def training_step(self, batch: dict, batch_idx: int = 0):
+        
         B = batch["collated_global_crops"].shape[0] // 2
         opt = self.optimizers()
         lr, wd, mom, t_temp, last_lr = self._schedule_values()
@@ -243,12 +255,13 @@ class JWST_DINO(L.LightningModule):
                         on_step=True, on_epoch=False, batch_size=B)
         return out["loss"]
 
+    # ── validation ──────────────────────────────────────────────────────────────
     def validation_step(self, batch: dict, batch_idx: int = 0, dataloader_idx: int = 0):
         B = batch["collated_global_crops"].shape[0] // 2
         _, _, _, t_temp, _ = self._schedule_values()
         out = self._compute_losses(batch, t_temp, training=False)
 
-        # Per-survey val only: log val_<survey>_<k>. Each name appears under a single
+        # Per-survey validation: log val_<survey>_<k>. Each name appears under a single
         # dataloader_idx, so there is no cross-dataloader collision, and being logged in
         # validation_step (not on_validation_epoch_end) it lands in callback_metrics before
         # the EpochPrinter/PlotMetrics callbacks run. The combined "total" is derived from
@@ -265,6 +278,11 @@ class JWST_DINO(L.LightningModule):
 
     @property
     def _effective_lr(self) -> float:
+        '''
+        for consistency, the lr configured in yaml is always scaled to
+        lr of batch size 1024, so that the effective lr for each run 
+        needs to adapt to actual batch sizes and number of GPUs.
+        '''
         return self.hparams.lr * math.sqrt(
             self.hparams.batch_size * self.trainer.world_size / 1024.0
         )
@@ -301,14 +319,6 @@ class JWST_DINO(L.LightningModule):
         for g in opt.param_groups:
             g["weight_decay"] = wd * g["wd_multiplier"]
             g["lr"] = (last_lr if g["is_last_layer"] else lr) * g["lr_multiplier"]
-
-    @torch.no_grad()
-    def _ema_update(self, m: float):
-        #loop over student/teacher backbone and head parameters in the same order, update teacher
-        for ps, pt in zip(self.student_backbone.parameters(), self.teacher_backbone.parameters()):
-            pt.mul_(m).add_(ps.detach(), alpha=1 - m)
-        for ps, pt in zip(self.student_dino_head.parameters(), self.teacher_dino_head.parameters()):
-            pt.mul_(m).add_(ps.detach(), alpha=1 - m)
 
     # ── optimizer with layer-wise lr decay ──────────────────────────────────────
     def configure_optimizers(self):
@@ -366,10 +376,6 @@ class JWST_DINO(L.LightningModule):
     def export_teacher_backbone(self) -> dict:
         """State dict in the dinov2 'teacher checkpoint' layout used downstream."""
         return {"teacher": self.teacher_backbone.state_dict()}
-
-
-_DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "..", "jwst_dino.yaml")
-
 
 def load_teacher_backbone(weights_path: str, device="cpu", config_path: str | None = None):
     """Load the frozen teacher ViT backbone for downstream eval (embeddings, probes).
