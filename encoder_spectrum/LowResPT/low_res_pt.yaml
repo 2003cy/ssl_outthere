@@ -58,6 +58,7 @@ trainer:
       name: low_res_pt_1_2_micron_noz_cut
   callbacks:
     - class_path: callbacks.EpochPrinter
+    - class_path: callbacks.PlotMetrics
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         monitor: val_hid_loss

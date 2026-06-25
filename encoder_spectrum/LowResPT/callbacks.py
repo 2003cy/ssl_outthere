@@ -1,6 +1,10 @@
 """Lightweight Lightning callbacks for LowResPT training."""
 
+import os
+
 from lightning.pytorch.callbacks import Callback
+
+from visualize_metrics import plot_metrics
 
 
 class EpochPrinter(Callback):
@@ -37,3 +41,28 @@ class EpochPrinter(Callback):
             f"lr={lr_s}",
             flush=True,
         )
+
+
+class PlotMetrics(Callback):
+    """Refresh ``<log_dir>/metrics.png`` from the CSVLogger CSV every PLOT_EVERY_N_EPOCHS epochs.
+
+    Fires on train-epoch end so train curves refresh during training. Flushes the
+    logger first, then delegates drawing to visualize_metrics.plot_metrics. Wrapped
+    so a plotting hiccup can never interrupt training.
+    """
+
+    PLOT_EVERY_N_EPOCHS = 2
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        if trainer.sanity_checking or not trainer.is_global_zero or trainer.log_dir is None:
+            return
+        if trainer.current_epoch % self.PLOT_EVERY_N_EPOCHS != 0:
+            return
+        try:
+            if trainer.logger is not None:
+                trainer.logger.save()  # flush pending rows to metrics.csv
+            csv_path = os.path.join(trainer.log_dir, "metrics.csv")
+            run_name = os.path.basename(trainer.log_dir.rstrip("/"))
+            plot_metrics(csv_path, os.path.join(trainer.log_dir, "metrics.png"), run_name)
+        except Exception as e:  # never let plotting kill a run
+            print(f"[PlotMetrics] skipped ({type(e).__name__}: {e})", flush=True)
