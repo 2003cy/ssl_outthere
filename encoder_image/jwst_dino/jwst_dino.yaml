@@ -9,10 +9,10 @@ model:
   mlp_ratio: 4.0
   in_chans: 1
   num_register_tokens: 7
-  drop_path_rate: 0.1
+  drop_path_rate: 0.2
   layerscale_init: 1.0e-5
   # projection head
-  head_n_prototypes: 8192
+  head_n_prototypes: 16384
   head_bottleneck_dim: 192
   head_nlayers: 3
   head_hidden_dim: 768
@@ -29,8 +29,8 @@ model:
   warmup_teacher_temp_epochs: 10
   student_temp: 0.1
   # optimizer / schedule (epochs are in OFFICIAL_EPOCH_LENGTH units)
-  lr: 1e-4  # base LR at batch=1024; will be scaled to true BS
-  min_lr: 1.0e-06
+  lr: 8.5e-5  # base @ batch=1024; actual LR = lr * sqrt(eff_batch/1024) via _effective_lr
+  min_lr: 5.0e-06   # floor the cosine LR schedule decays to (absolute, not batch-scaled)
   warmup_epochs: 5
   weight_decay: 0.004
   weight_decay_end: 0.04
@@ -45,7 +45,7 @@ data:
   root: ~/ssl_outthere/data/image/
   filter: f150w
   survey: [cosmos, ceers, outthere, jades]   # joint training; per-survey 90/5/5 split
-  batch_size: 64   # 64/GPU x 12 = 768 eff; fits 40GB A100 (DDP). LR auto-scales via _effective_lr.
+  batch_size: 56   # per-GPU; sized to fit 16384 prototypes on 40GB A100. x20 GPU = 1120 eff; LR auto-scales
   num_workers: 16
   # crop / patch geometry (linked to model)
   patch_size: 6
@@ -58,7 +58,7 @@ data:
   noise_w: 1.5
   noise_s_max: 2.0   # cap floor-mult at sqrt(1+2^2)=2.24 (keep object cores; drop only the wash-out tail)
   # iBOT masking
-  ibot_mask_ratio_min_max: [0.1, 0.4]
+  ibot_mask_ratio_min_max: [0.1, 0.3]
   ibot_mask_sample_probability: 0.5
 
 trainer:
@@ -67,7 +67,7 @@ trainer:
   devices: 1          # overridden by sbatch (--trainer.devices / --trainer.num_nodes)
   num_nodes: 1
   precision: bf16-mixed
-  max_epochs: 280           # x limit_train_batches = 140000 steps; ~22.8h @ ~6150 step/h (≈1h margin under 24h)
+  max_epochs: 310           # total steps = max_epochs x limit_train_batches; cosine LR/teacher schedules anneal over this
   limit_train_batches: 500
   check_val_every_n_epoch: 10
   limit_val_batches: 50

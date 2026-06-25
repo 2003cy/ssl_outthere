@@ -76,15 +76,20 @@ class ExportTeacherBackbone(Callback):
 
 
 class PlotMetrics(Callback):
-    """Refresh ``<log_dir>/metrics.png`` from the CSVLogger CSV at every validation.
+    """Refresh ``<log_dir>/metrics.png`` from the CSVLogger CSV every PLOT_EVERY_N_EPOCHS epochs.
 
-    Flushes the logger first so the just-finished epoch is on disk, then delegates
-    the drawing to visualize_metrics.plot_metrics. Wrapped so a plotting hiccup can
-    never interrupt training.
+    Fires on train-epoch end so train curves refresh between the 10-epoch val cadence,
+    throttled to every Nth epoch so the rank-0 plot doesn't stall the DDP barrier each epoch.
+    Flushes the logger first, then delegates drawing to visualize_metrics.plot_metrics.
+    Wrapped so a plotting hiccup can never interrupt training.
     """
 
-    def on_validation_epoch_end(self, trainer, pl_module):
+    PLOT_EVERY_N_EPOCHS = 2
+
+    def on_train_epoch_end(self, trainer, pl_module):
         if trainer.sanity_checking or not trainer.is_global_zero or trainer.log_dir is None:
+            return
+        if trainer.current_epoch % self.PLOT_EVERY_N_EPOCHS != 0:
             return
         try:
             if trainer.logger is not None:

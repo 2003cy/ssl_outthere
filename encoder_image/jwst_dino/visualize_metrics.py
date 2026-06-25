@@ -82,6 +82,14 @@ def plot_metrics(csv_path: str, out_path: str | None = None, run_name: str | Non
     if "val_loss" not in df.columns:
         df["val_loss"] = np.nan  # keep downstream dropna()/title robust on train-only CSVs
 
+    # Bottom x-axis: cumulative tokens_seen (config-invariant). It is linear in step, so
+    # derive the per-step scale to also place val rows (which don't log tokens_seen). The
+    # top x-axis (see _epoch_axis) shows the same range in epochs.
+    ref = df.dropna(subset=["tokens_seen", "step"])
+    tok_per_step = float((ref["tokens_seen"] / ref["step"].clip(lower=1)).iloc[-1])
+    df["_x"] = df["step"] * tok_per_step / 1e9
+    x_to_epoch = df["epoch"].iloc[-1] / df["_x"].iloc[-1] if df["_x"].iloc[-1] else 0.0
+
     out_path = out_path or os.path.join(os.path.dirname(csv_path), "metrics.png")
     tr_all = df.dropna(subset=["train_loss"])
     skip = min(skip_first, len(tr_all) // 5)  # never drop more than ~20% (short runs)
@@ -89,10 +97,10 @@ def plot_metrics(csv_path: str, out_path: str | None = None, run_name: str | Non
     va = df.dropna(subset=["val_loss"])
     if len(tr) == 0:
         return None
-    x_tr = tr["step"].to_numpy()
+    x_tr = tr["_x"].to_numpy()
 
     _style()
-    fig, axes = plt.subplots(2, 3, figsize=(15, 7.5), constrained_layout=True)
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8.4), constrained_layout=True)
     axes = axes.ravel()
 
     surveys = _detect_surveys(df.columns)
@@ -103,13 +111,13 @@ def plot_metrics(csv_path: str, out_path: str | None = None, run_name: str | Non
             ax.plot(x_tr, tr[tcol].rolling(_SMOOTH, min_periods=5).mean(),
                     color=_C_TRAIN, lw=1.8, label="train")
         if vcol in va.columns and va[vcol].notna().any():
-            ax.plot(va["step"], va[vcol], "o-", color=_C_VAL, ms=4, lw=1.2, label="val")
+            ax.plot(va["_x"], va[vcol], "o-", color=_C_VAL, ms=4, lw=1.2, label="val")
         for i, s in enumerate(surveys):  # per-survey val overlay (if present)
             sc = f"val_{s}_{key}"
             if sc in va.columns and va[sc].notna().any():
-                ax.plot(va["step"], va[sc], "--", color=_C_SURVEY[i % len(_C_SURVEY)],
+                ax.plot(va["_x"], va[sc], "--", color=_C_SURVEY[i % len(_C_SURVEY)],
                         lw=1.0, marker=".", ms=4, alpha=0.85, label=f"val·{s}")
-        ax.set_title(title)
+        ax.set_title(title, pad=22)
         ax.legend(loc="best", fontsize=8)
         ax.tick_params(labelsize=8)
 
@@ -123,15 +131,20 @@ def plot_metrics(csv_path: str, out_path: str | None = None, run_name: str | Non
             if norm and np.nanmax(y) > 0:
                 y, lab = y / np.nanmax(y), "lr (norm)"
             ax.plot(x_tr, y, lw=1.5, label=lab)
-    ax.set_title("schedules")
+    ax.set_title("schedules", pad=22)
     ax.legend(loc="best", fontsize=8)
     ax.tick_params(labelsize=8)
 
     for ax in axes:
-        ax.set_xlabel("step", fontsize=9)
+        ax.set_xlabel("tokens seen (x1e9)", fontsize=9)
+        if x_to_epoch:  # top axis: same range in epochs
+            sec = ax.secondary_xaxis("top", functions=(lambda x: x * x_to_epoch,
+                                                        lambda e: e / x_to_epoch))
+            sec.set_xlabel("epoch", fontsize=8)
+            sec.tick_params(labelsize=7)
 
     epoch = int(df["epoch"].max()) if "epoch" in df.columns else -1
-    step = int(x_tr[-1])
+    step = int(tr["step"].iloc[-1])
     vlast = float(va["val_loss"].iloc[-1]) if len(va) else float("nan")
     name = run_name or os.path.basename(os.path.dirname(os.path.abspath(csv_path)))
     fig.suptitle(f"{name}    |    epoch {epoch}  ·  step {step}  ·  val_loss {vlast:.3f}",

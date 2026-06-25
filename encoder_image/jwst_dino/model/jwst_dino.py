@@ -27,7 +27,7 @@ from .vision_transformer import VisionTransformer
 
 def cosine_sched(step, total, base, final, warmup=0, freeze=0, start=0.0):
     """One closed-form schedule that reproduces every DINOv2 cosine curve.
-
+    function used to schedule lr, wd, teacher momentum, teacher temp, last-layer lr.
     freeze steps at 0, then linear warmup start->base, then cosine base->final.
     (teacher_temp uses base==final so it is constant after warmup.)
     """
@@ -236,7 +236,10 @@ class JWST_DINO(L.LightningModule):
             {f"train_{k}": v for k, v in out.items()},
             prog_bar=True, on_step=True, on_epoch=False, batch_size=B,
         )
-        self.log_dict({"lr": lr, "wd": wd, "mom": mom, "teacher_temp": t_temp},
+        # tokens_seen: config-invariant x-axis = cumulative student patch tokens (all crops).
+        tokens_seen = self.global_step * B * self.trainer.world_size * self._tokens_per_image
+        self.log_dict({"lr": lr, "wd": wd, "mom": mom, "teacher_temp": t_temp,
+                       "tokens_seen": float(tokens_seen)},
                         on_step=True, on_epoch=False, batch_size=B)
         return out["loss"]
 
@@ -266,6 +269,17 @@ class JWST_DINO(L.LightningModule):
             self.hparams.batch_size * self.trainer.world_size / 1024.0
         )
 
+    @property
+    def _tokens_per_image(self) -> int:
+        """
+        Computed Student patch token number per image across all crops (2 global + N local).
+        This is used to standardize the training time across different setups (batch size, number of GPUs, etc.) by logging the number of tokens seen.
+        """
+        h = self.hparams
+        sg = (h.global_crops_size - h.patch_size) // h.patch_stride + 1
+        sl = (h.local_crops_size - h.patch_size) // h.patch_stride + 1
+        return 2 * sg * sg + h.local_crops_number * sl * sl
+
     # ── schedules ────────────────────────────────────────────────────────────────
     def _schedule_values(self):
         h = self.hparams
@@ -290,6 +304,7 @@ class JWST_DINO(L.LightningModule):
 
     @torch.no_grad()
     def _ema_update(self, m: float):
+        #loop over student/teacher backbone and head parameters in the same order, update teacher
         for ps, pt in zip(self.student_backbone.parameters(), self.teacher_backbone.parameters()):
             pt.mul_(m).add_(ps.detach(), alpha=1 - m)
         for ps, pt in zip(self.student_dino_head.parameters(), self.teacher_dino_head.parameters()):
@@ -297,11 +312,7 @@ class JWST_DINO(L.LightningModule):
 
     # ── optimizer with layer-wise lr decay ──────────────────────────────────────
     def configure_optimizers(self):
-        groups = self._param_groups()
-        return AdamW(groups, lr=self._effective_lr, betas=tuple(self.hparams.betas))
-
-    def _param_groups(self):
-        """One group per parameter, tagged with lr/wd multipliers + last-layer flag.
+        """Build one param group per parameter, tagged with lr/wd multipliers + last-layer flag.
 
         lr_multiplier = layerwise_decay ** (depth + 1 - layer_id); patch_embed gets
         an extra patch_embed_lr_mult; bias/norm/layerscale params get wd 0.
@@ -312,22 +323,32 @@ class JWST_DINO(L.LightningModule):
         named = list(self.student_backbone.named_parameters(prefix="backbone")) + \
             list(self.student_dino_head.named_parameters(prefix="dino_head"))
         for name, param in named:
+            # skip frozen parameters
             if not param.requires_grad:
                 continue
+
             layer_id = self._layer_id(name, n_blocks)
             lr_mult = h.layerwise_decay ** (n_blocks + 1 - layer_id)
+            # update lr multipliers for patch_embed and last_layer wd multipliers for bias/norm params
             if "patch_embed" in name:
                 lr_mult *= h.patch_embed_lr_mult
             wd_mult = 0.0 if (name.endswith(".bias") or "norm" in name or "gamma" in name) else 1.0
+            
             groups.append({
                 "params": [param], "name": name,
                 "lr_multiplier": lr_mult, "wd_multiplier": wd_mult,
                 "is_last_layer": "last_layer" in name,
             })
-        return groups
+            
+        return AdamW(groups, lr=self._effective_lr, betas=tuple(self.hparams.betas))
 
     @staticmethod
     def _layer_id(name: str, n_blocks: int) -> int:
+        '''
+        encode different layer types to assign a self-defined integer value
+        will be usee in layer-wise learning rate decay
+        '''
+        
         if name.startswith("dino_head"):
             return n_blocks + 1
         if any(k in name for k in ("pos_embed", "cls_token", "register_tokens", "mask_token", "patch_embed")):

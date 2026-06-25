@@ -27,8 +27,8 @@ cd /u/yacheng/ssl_outthere/encoder_image/jwst_dino
 srun $PYTHON trainer.py fit \
     --config="$config" \
     --trainer.devices=4 \
-    --trainer.num_nodes=1 \
+    --trainer.num_nodes=1 \    
     --trainer.max_epochs=50 \
-    --trainer.limit_train_batches=20 \
+    --trainer.limit_train_batches=10 \
     --trainer.check_val_every_n_epoch=1 \
     --trainer.logger.init_args.name=jwst_dino_ps6_st3_dev
