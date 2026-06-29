@@ -30,8 +30,8 @@ _LOSS_PANELS = [
     ("koleo", "KoLeo"),
 ]
 _SMOOTH = 80      # rolling window for the (noisy) per-step train curve
-_SKIP_FIRST = 100  # drop the first logging points (very high/unstable warmup régime,
-                   # as astrodino does); clamped to <=20% of the run below.
+_SKIP_FIRST = 10  # drop the first few logging points (very-early warmup spikes);
+                   # keep most of the early warmup. Clamped to <=20% of the run below.
 
 _C_TRAIN = "#1f77b4"
 _C_VAL = "#d62728"

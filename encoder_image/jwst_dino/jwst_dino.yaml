@@ -20,22 +20,23 @@ model:
   dino_loss_weight: 1.1
   ibot_loss_weight: 1.0
   koleo_loss_weight: 0.03
-  ibot_separate_head: false
+  ibot_separate_head: true   # iBOT gets its own head/center → decouples patch sharpening from the DINO CLS head
   # teacher EMA + temperature
-  momentum_teacher: 0.992
+  momentum_teacher: 0.994
   final_momentum_teacher: 1.0
   teacher_temp: 0.07
-  warmup_teacher_temp: 0.04
+  warmup_teacher_temp: 0.06
   warmup_teacher_temp_epochs: 10
   student_temp: 0.1
+  center_momentum: 0.95   # EMA timescale of the DINO/iBOT teacher center; higher = slower/smoother target
   # optimizer / schedule (epochs are in OFFICIAL_EPOCH_LENGTH units)
-  lr: 8.5e-5  # base @ batch=1024; actual LR = lr * sqrt(eff_batch/1024) via _effective_lr
-  min_lr: 5.0e-06   # floor the cosine LR schedule decays to (absolute, not batch-scaled)
-  warmup_epochs: 5
+  lr: 8.0e-5  # base @ batch=1024; actual LR = lr * sqrt(eff_batch/1024) via _effective_lr
+  min_lr: 1.0e-06   # floor the cosine LR schedule decays to (absolute, not batch-scaled); lower=quieter tail
+  warmup_epochs: 10
   weight_decay: 0.004
   weight_decay_end: 0.04
   clip_grad: 3.0
-  freeze_last_layer_epochs: 2
+  freeze_last_layer_epochs: 3
   patch_embed_lr_mult: 0.2
   layerwise_decay: 0.9
   betas: [0.9, 0.999]

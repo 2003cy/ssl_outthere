@@ -76,6 +76,7 @@ class JWST_DINO(L.LightningModule):
         warmup_teacher_temp: float = 0.04,
         warmup_teacher_temp_epochs: int = 10,
         student_temp: float = 0.1,
+        center_momentum: float = 0.9,
         # ── optimizer / schedule ──
         lr: float = 8.66e-5,
         min_lr: float = 5e-6,
@@ -93,15 +94,15 @@ class JWST_DINO(L.LightningModule):
         self.save_hyperparameters()
         self.automatic_optimization = False
 
-        if ibot_separate_head:
-            raise NotImplementedError(
-                "ibot_separate_head=True is reserved but not implemented; iBOT shares the DINO head."
-            )
-
         self.student_backbone = self._build_backbone(drop_path_rate)
         self.teacher_backbone = self._build_backbone(0.0)  # teacher: no stochastic depth
         self.student_dino_head = self._build_head()
         self.teacher_dino_head = self._build_head()
+        # iBOT patch head: its own head/prototypes/center when separate (decouples the
+        # patch-level sharpening from the DINO CLS head); else iBOT reuses the DINO head.
+        if ibot_separate_head:
+            self.student_ibot_head = self._build_head()
+            self.teacher_ibot_head = self._build_head()
 
         # Teacher is an EMA of the student: start identical, never gets gradients.
         self.teacher_backbone.load_state_dict(self.student_backbone.state_dict())
@@ -110,9 +111,13 @@ class JWST_DINO(L.LightningModule):
             p.requires_grad = False
         for p in self.teacher_dino_head.parameters():
             p.requires_grad = False
+        if ibot_separate_head:
+            self.teacher_ibot_head.load_state_dict(self.student_ibot_head.state_dict())
+            for p in self.teacher_ibot_head.parameters():
+                p.requires_grad = False
 
-        self.dino_loss = DINOLoss(head_n_prototypes, student_temp=student_temp)
-        self.ibot_patch_loss = iBOTPatchLoss(head_n_prototypes, student_temp=student_temp)
+        self.dino_loss = DINOLoss(head_n_prototypes, student_temp=student_temp, center_momentum=center_momentum)
+        self.ibot_patch_loss = iBOTPatchLoss(head_n_prototypes, student_temp=student_temp, center_momentum=center_momentum)
         self.koleo_loss = KoLeoLoss()
 
     # ── builders ──────────────────────────────────────────────────────────────
@@ -131,6 +136,8 @@ class JWST_DINO(L.LightningModule):
         super().train(mode)
         self.teacher_backbone.eval()
         self.teacher_dino_head.eval()
+        if self.hparams.ibot_separate_head:
+            self.teacher_ibot_head.eval()
         return self
 
     def _build_head(self) -> DINOHead:
@@ -139,6 +146,13 @@ class JWST_DINO(L.LightningModule):
             in_dim=h.embed_dim, out_dim=h.head_n_prototypes, hidden_dim=h.head_hidden_dim,
             bottleneck_dim=h.head_bottleneck_dim, nlayers=h.head_nlayers,
         )
+
+    def _ibot_heads(self):
+        """(student, teacher) head used for iBOT patch tokens — the separate iBOT
+        head when ibot_separate_head, else the shared DINO head."""
+        if self.hparams.ibot_separate_head:
+            return self.student_ibot_head, self.teacher_ibot_head
+        return self.student_dino_head, self.teacher_dino_head
 
     # ── losses shared by train / val ────────────────────────────────────────────
     def _compute_losses(self, batch: dict, teacher_temp: float, training: bool) -> dict:
@@ -149,6 +163,7 @@ class JWST_DINO(L.LightningModule):
         masks_weight = batch["masks_weight"]            # (M,)
         B = global_crops.shape[0] // 2
         n_global, n_local = 2, h.local_crops_number
+        s_ibot_head, t_ibot_head = self._ibot_heads()
 
         # ── teacher (no grad): full global crops ──
         with torch.no_grad():
@@ -161,7 +176,7 @@ class JWST_DINO(L.LightningModule):
             t_dino = self._center_softmax(self.dino_loss, t_cls_head, teacher_temp, training)
 
             # iBOT: teacher tokens at the masked positions (full-image targets).
-            t_masked = self.teacher_dino_head(t_patch[masks])          # (M, K)
+            t_masked = t_ibot_head(t_patch[masks])                     # (M, K)
             t_ibot = self._center_softmax_ibot(t_masked, teacher_temp, training)
 
             if training:
@@ -175,7 +190,7 @@ class JWST_DINO(L.LightningModule):
 
         s_glob_cls_head = self.student_dino_head(s_glob_cls)           # (2B, K)
         s_loc_cls_head = self.student_dino_head(s_loc_cls)             # (nL*B, K)
-        s_masked_head = self.student_dino_head(s_glob_patch[masks])    # (M, K)
+        s_masked_head = s_ibot_head(s_glob_patch[masks])              # (M, K)
 
         # ── DINO loss (local + global), normalised exactly as DINOv2 ──
         n_local_terms = n_local * n_global
@@ -225,6 +240,9 @@ class JWST_DINO(L.LightningModule):
             pt.mul_(m).add_(ps.detach(), alpha=1 - m)
         for ps, pt in zip(self.student_dino_head.parameters(), self.teacher_dino_head.parameters()):
             pt.mul_(m).add_(ps.detach(), alpha=1 - m)
+        if self.hparams.ibot_separate_head:
+            for ps, pt in zip(self.student_ibot_head.parameters(), self.teacher_ibot_head.parameters()):
+                pt.mul_(m).add_(ps.detach(), alpha=1 - m)
 
     # ── training ────────────────────────────────────────────────────────────────
     def training_step(self, batch: dict, batch_idx: int = 0):
@@ -332,6 +350,8 @@ class JWST_DINO(L.LightningModule):
         groups = []
         named = list(self.student_backbone.named_parameters(prefix="backbone")) + \
             list(self.student_dino_head.named_parameters(prefix="dino_head"))
+        if h.ibot_separate_head:
+            named += list(self.student_ibot_head.named_parameters(prefix="ibot_head"))
         for name, param in named:
             # skip frozen parameters
             if not param.requires_grad:
@@ -359,7 +379,7 @@ class JWST_DINO(L.LightningModule):
         will be usee in layer-wise learning rate decay
         '''
         
-        if name.startswith("dino_head"):
+        if name.startswith("dino_head") or name.startswith("ibot_head"):
             return n_blocks + 1
         if any(k in name for k in ("pos_embed", "cls_token", "register_tokens", "mask_token", "patch_embed")):
             return 0
