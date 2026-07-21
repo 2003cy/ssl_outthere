@@ -8,6 +8,7 @@ paper/
 # ignore model outputs
 **/outputs/**
 **/checkpoints/**
+**/templates/**
 encoder_image/astrodino/model
 
 !**/.gitkeep
