@@ -54,6 +54,13 @@ class FusionDataModule(L.LightningDataModule):
                            Mirrors encoder_spectrum/LowResPT's ``frac_valid_pix``
                            (which thresholds ``valid.mean(axis=1)``) and drops the
                            near-empty spectra that otherwise pool to a zero vector.
+        group_key:         H5 key of a per-row group id (e.g. ``id`` = dja_id).
+                           When set, the train/val split is grouped so every row
+                           sharing a group id lands on the SAME side. Required for
+                           the multi-survey crossmatch, where one spectrum is
+                           matched to several image cutouts (duplicate rows) — a
+                           plain row split would leak a spectrum across the split
+                           and inflate retrieval metrics. None = plain row split.
     """
 
     def __init__(
@@ -70,6 +77,7 @@ class FusionDataModule(L.LightningDataModule):
         frac_valid_pix: float = 0.0,
         token_mask_keys: Optional[dict[str, str]] = None,
         stats_keys: Optional[dict[str, str]] = None,
+        group_key: Optional[str] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -154,20 +162,50 @@ class FusionDataModule(L.LightningDataModule):
                     valid_frac = f[mkey][:].mean(axis=1)        # (N,) in [0, 1]
                     selection &= valid_frac > self.hparams.frac_valid_pix
 
+            # Per-row group id (e.g. dja_id) for grouped splitting, read before close.
+            gkey = self.hparams.group_key
+            if gkey and gkey in f:
+                group_all = f[gkey][:]
+            else:
+                group_all = None
+                if gkey:
+                    warnings.warn(
+                        f"group_key='{gkey}' not found in {self.hparams.h5_path} — "
+                        f"falling back to a plain row split."
+                    )
+
         indices = np.where(selection)[0]
         n_kept = len(indices)
         if n_kept < n_total:
             print(f"[FusionDataModule] selection: {n_kept}/{n_total} samples kept")
 
-        # Reproducible shuffle then split on the filtered set
+        # Reproducible split on the filtered set. With group_key, split by unique
+        # group so every row of a group (e.g. all survey cutouts of one spectrum)
+        # stays on one side; otherwise a plain shuffled row split.
         rng = np.random.default_rng(42)
-        rng.shuffle(indices)
-        n_train = int(n_kept * self.hparams.train_val_split)
+        if group_all is not None:
+            groups = group_all[indices]
+            uniq = np.unique(groups)
+            rng.shuffle(uniq)
+            n_train_groups = int(len(uniq) * self.hparams.train_val_split)
+            train_groups = set(uniq[:n_train_groups].tolist())
+            is_train = np.fromiter((g in train_groups for g in groups),
+                                   dtype=bool, count=len(groups))
+            train_idx, val_idx = indices[is_train], indices[~is_train]
+            rng.shuffle(train_idx)
+            rng.shuffle(val_idx)
+            print(f"[FusionDataModule] grouped split on '{self.hparams.group_key}': "
+                  f"{len(uniq)} groups → {len(train_idx)} train / {len(val_idx)} val rows")
+            self._train_indices, self._val_indices = train_idx, val_idx
+        else:
+            rng.shuffle(indices)
+            n_train = int(n_kept * self.hparams.train_val_split)
+            self._train_indices, self._val_indices = indices[:n_train], indices[n_train:]
 
         self.train_dataset = FusionEmbeddingDataset(
             h5_path=self.hparams.h5_path,
             modality_keys=self.hparams.modality_keys,
-            indices=indices[:n_train],
+            indices=self._train_indices,
             modality_mask_prob=self.hparams.modality_mask_prob,
             token_mask_keys=self.hparams.token_mask_keys,
             stats_keys=self.hparams.stats_keys,
@@ -175,7 +213,7 @@ class FusionDataModule(L.LightningDataModule):
         self.val_dataset = FusionEmbeddingDataset(
             h5_path=self.hparams.h5_path,
             modality_keys=self.hparams.modality_keys,
-            indices=indices[n_train:],
+            indices=self._val_indices,
             modality_mask_prob=0.0,  # no masking during validation
             token_mask_keys=self.hparams.token_mask_keys,
             stats_keys=self.hparams.stats_keys,

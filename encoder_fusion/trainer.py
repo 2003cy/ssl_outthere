@@ -103,6 +103,7 @@ class MultimodalFusionModule(L.LightningModule):
                         pool=cfg.get("pool", None),
                         num_heads=cfg.get("num_heads", 4),
                         stats_dim=cfg.get("stats_dim", None),
+                        stats_scale=cfg.get("stats_scale", None),
                     )
                 # else: input_dim is null → deferred to setup()
 
@@ -134,10 +135,12 @@ class MultimodalFusionModule(L.LightningModule):
                 pool=cfg.get("pool", None),
                 num_heads=cfg.get("num_heads", 4),
                 stats_dim=stats_dim,
+                stats_scale=cfg.get("stats_scale", None),
             )
             pool = cfg.get("pool", None)
             print(f"[setup] Registered modality '{name}' with auto-detected "
-                  f"input_dim={input_dim}, pool={pool}, stats_dim={stats_dim}")
+                  f"input_dim={input_dim}, pool={pool}, stats_dim={stats_dim}, "
+                  f"stats_scale={cfg.get('stats_scale', None)}")
 
     # ------------------------------------------------------------------
     # Helpers
