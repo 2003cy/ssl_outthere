@@ -20,13 +20,13 @@ model:
   dino_loss_weight: 1.1
   ibot_loss_weight: 1.0
   koleo_loss_weight: 0.03
-  ibot_separate_head: true   # iBOT gets its own head/center → decouples patch sharpening from the DINO CLS head
+  ibot_separate_head: false  # shared DINO+iBOT head (dinov2/astrodino default; v6 separate-head worsened end iBOT)
   # teacher EMA + temperature
   momentum_teacher: 0.994
   final_momentum_teacher: 1.0
   teacher_temp: 0.07
-  warmup_teacher_temp: 0.06
-  warmup_teacher_temp_epochs: 10
+  warmup_teacher_temp: 0.04   # softer start (dinov2/astrodino default), was 0.06
+  warmup_teacher_temp_epochs: 30   # longer teacher-temp warmup (dinov2 warms ~30% of run), was 10
   student_temp: 0.1
   center_momentum: 0.95   # EMA timescale of the DINO/iBOT teacher center; higher = slower/smoother target
   # optimizer / schedule (epochs are in OFFICIAL_EPOCH_LENGTH units)
@@ -46,7 +46,7 @@ data:
   root: ~/ssl_outthere/data/image/
   filter: f150w
   survey: [cosmos, ceers, outthere, jades]   # joint training; per-survey 90/5/5 split
-  batch_size: 56   # per-GPU; sized to fit 16384 prototypes on 40GB A100. x20 GPU = 1120 eff; LR auto-scales
+  batch_size: 60   # per-GPU; ~37 GiB peak on 40GB A100 (separate_head=false). x20 GPU = 1200 eff; LR auto-scales
   num_workers: 16
   # crop / patch geometry (linked to model)
   patch_size: 6
@@ -56,7 +56,7 @@ data:
   local_crops_number: 8
   center_crop_size: 100
   # within-survey noise aug: half-normal s=|N(0,w)|, capped, scaled by per-tile SKY_SIGMA
-  noise_w: 1.5
+  noise_w: 1.0       # half-normal scale; lowered 1.5->1.0 so most views are lower-noise (helps iBOT patch targets)
   noise_s_max: 2.0   # cap floor-mult at sqrt(1+2^2)=2.24 (keep object cores; drop only the wash-out tail)
   # iBOT masking
   ibot_mask_ratio_min_max: [0.1, 0.3]
@@ -79,10 +79,9 @@ trainer:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
       save_dir: outputs/
-      name: jwst_dino_ps6_st3
+      name: jwst_dino_ps6_st3_bs60_size72
   callbacks:
     - class_path: callbacks.EpochPrinter
-    - class_path: callbacks.ExportTeacherBackbone
     - class_path: callbacks.PlotMetrics
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:

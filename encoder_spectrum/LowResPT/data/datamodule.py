@@ -53,6 +53,8 @@ class LowResDataModule(L.LightningDataModule):
                               None = no cut).
         use_jansky:           If True, deliver raw uJy (f_nu) flux; if False
                               (default), convert to f_lambda (∝ f_nu / λ²).
+        err_column:           Per-pixel error column for inverse-variance loss
+                              weighting ("full_err" or "err").
     """
 
     def __init__(
@@ -71,6 +73,7 @@ class LowResDataModule(L.LightningDataModule):
         use_jansky: bool = False,
         wl_ref_min: float = 1.0,
         wl_ref_max: float = 2.0,
+        err_column: str = "full_err",
     ):
         """
         wl_ref_min / wl_ref_max: observed-frame wavelength range (µm). Used both
@@ -83,10 +86,15 @@ class LowResDataModule(L.LightningDataModule):
         self.save_hyperparameters()
         self.train_dataset = None
         self.val_dataset = None
+        # Assign a prebuilt LowResDataset here to skip the FITS read in setup().
+        # The Optuna sweep uses this to share one dataset across every trial; note
+        # that an injected dataset carries its own cuts, so the `grades` /
+        # `frac_valid_pix` / ... hparams below are then ignored.
+        self.dataset = None
 
     def setup(self, stage: str = None) -> None:
         if self.train_dataset is None:
-            dataset = LowResDataset(
+            dataset = self.dataset if self.dataset is not None else LowResDataset(
                 self.hparams.fits_path,
                 grades=getattr(self.hparams, "grades", (1, 2, 3)),
                 min_obs_frac=getattr(self.hparams, "min_obs_frac", 0.5),
@@ -97,6 +105,7 @@ class LowResDataModule(L.LightningDataModule):
                 wl_ref_min=getattr(self.hparams, "wl_ref_min", 1.0),
                 wl_ref_max=getattr(self.hparams, "wl_ref_max", 2.0),
                 use_jansky=getattr(self.hparams, "use_jansky", False),
+                err_column=getattr(self.hparams, "err_column", "full_err"),
             )
             n_total = len(dataset)
             n_train = int(n_total * self.hparams.train_val_split)
@@ -136,6 +145,7 @@ class LowResDataModule(L.LightningDataModule):
                 sampler=sampler,
                 drop_last=True,
                 collate_fn=self._pad_collate,
+                pin_memory=torch.cuda.is_available(),
                 persistent_workers=self.hparams.num_workers > 0,
             )
         return DataLoader(
@@ -145,6 +155,7 @@ class LowResDataModule(L.LightningDataModule):
             shuffle=True,
             drop_last=True,
             collate_fn=self._pad_collate,
+            pin_memory=torch.cuda.is_available(),
             persistent_workers=self.hparams.num_workers > 0,
         )
 
@@ -156,6 +167,7 @@ class LowResDataModule(L.LightningDataModule):
             shuffle=False,
             drop_last=False,
             collate_fn=self._pad_collate,
+            pin_memory=torch.cuda.is_available(),
             persistent_workers=self.hparams.num_workers > 0,
         )
 

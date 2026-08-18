@@ -8,6 +8,7 @@ paper/
 # ignore model outputs
 **/outputs/**
 **/checkpoints/**
+**/templates/**
 encoder_image/astrodino/model
 
 !**/.gitkeep
@@ -35,3 +36,25 @@ sync.sh
 .claude/*
 .pixi/*
 pixi.lock
+
+# Optuna study artifacts (sqlite + per-trial checkpoints/logs)
+encoder_spectrum/LowResPT/optuna/studies/
+
+# large binaries that slip past the extension rules
+*.bak-*
+*.h5.bak*
+*.npz
+*.db
+
+# crossmatched embedding products (tens of GB)
+data/crossmatched/
+
+# scratch analysis outputs
+tmp_new/
+test_figure/
+
+# experiment tracking and notebook caches
+wandb/
+**/wandb/
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/

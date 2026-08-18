@@ -3,7 +3,7 @@
 Public symbols
 --------------
     find_line_peaks(flux_valid, prominence) -> np.ndarray
-        Detect emission-line peaks in pixel space (unchanged from ma_specformer).
+        Detect emission-line peaks in pixel space.
 
     mask_patches(patches, flux_norm_pixel, valid_patches, token_valid_mask, *,
                  mask_ratio, min_unmasked, max_line_blocks, line_prominence,
@@ -19,6 +19,7 @@ Per-spectrum algorithm
      anchored as blocks — emission lines have PRIORITY over random masking, but
      which detected lines get masked varies per draw (augmentation). With
      num_line_detect == max_line_blocks this reduces to "mask the strongest lines".
+     max_line_blocks == 0 → pure random masking.
   3. The remaining token budget, ceil(N_valid * mask_ratio), is filled with
      blocks anchored on random free valid tokens.
   4. Every masked token has its full patch vector zeroed.
@@ -30,11 +31,10 @@ the anchor at a uniformly-random position inside the run (C=3 → left/middle/
 right; C=2 → an edge; C=1 → original single-token masking). For C>1, blocks never
 share a token AND never abut: a ≥1-token gap separates any two blocks, so every
 masked run is exactly C long (never merged into 2C/3C). For C=1 the gap is
-dropped — it is plain random MAE where masked tokens may sit adjacent. Budget
-consequences: the C>1 gap constraint can leave a spectrum slightly SHORT of the
-target, and block placement overshoots it by at most C-1 tokens; C=1 hits the
-target closely. Only the line *anchor* token (where the peak lands) is flagged
-in `line_mask_token`; the surrounding block tokens count as continuum.
+dropped — it is plain random MAE where masked tokens may sit adjacent. Only the
+line *anchor* token (where the peak lands) is flagged in `line_mask_token`; the
+surrounding block tokens count as continuum. `line_mask_token` is used only for
+diagnostic line-vs-continuum metrics (no loss weighting).
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def _peak_to_token(peak_pixel: int, patch_size: int, stride: int, n_tokens: int)
     covering tokens we pick the one whose patch centre is closest to the peak,
     clamped to the valid token range.
     """
-    
+
     t_min = max(0, (peak_pixel - patch_size + 1 + stride - 1) // stride)
     t_max = min(n_tokens - 1, peak_pixel // stride)
     t_center = (peak_pixel - patch_size // 2) // max(stride, 1)
@@ -151,8 +151,7 @@ def mask_patches(
         continuous_patch_length: Block length C (1, 2, or 3); see module docstring.
         num_line_detect:  Size of the candidate pool of strongest detected lines
                           from which `max_line_blocks` are picked at random
-                          (clamped to >= max_line_blocks). num_line_detect ==
-                          max_line_blocks → always mask the strongest lines.
+                          (clamped to >= max_line_blocks).
 
     Returns:
         masked_patches:    (B, N, P) — masked tokens zeroed out.

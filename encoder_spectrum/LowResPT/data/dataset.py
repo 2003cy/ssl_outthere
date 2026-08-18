@@ -75,6 +75,10 @@ class LowResDataset(Dataset):
                       degenerate (all-zero) embedding.
         use_jansky:   If True, return the raw uJy (f_nu) flux. If False (default),
                       convert to f_lambda (∝ f_nu / λ²).
+        err_column:   Which per-pixel error column to load for inverse-variance
+                      loss weighting ("full_err" includes systematic-error
+                      inflation; "err" is the formal pipeline error). Same units
+                      as flux, converted to f_lambda alongside it.
     """
 
     def __init__(
@@ -89,8 +93,10 @@ class LowResDataset(Dataset):
         wl_ref_max: Optional[float] = 2.0,
         frac_valid_pix: Optional[float] = None,
         use_jansky: bool = False,
+        err_column: str = "full_err",
     ):
         self.use_jansky = use_jansky
+        self.err_column = err_column
         if not self.use_jansky:
             print(
                 "Converting flux from f_nu (uJy) to f_lambda (∝ f_nu / λ²) "
@@ -120,6 +126,12 @@ class LowResDataset(Dataset):
             flux = np.asarray(cat["flux"], dtype=np.float32)[:, wl_keep]
             finite = np.isfinite(flux)
             flux[~finite] = 0.0
+
+            # Per-pixel error for inverse-variance loss weighting. Non-finite or
+            # non-positive errors are sentinels (bad pixels) — left as-is here
+            # and excluded downstream (model._token_weights drops err <= 0 /
+            # non-finite via the err_ok mask).
+            err = np.asarray(cat[self.err_column], dtype=np.float32)[:, wl_keep]
 
             # Valid mask: the authoritative per-pixel validity flag from the data
             valid = np.asarray(cat["valid_spec"], dtype=bool)[:, wl_keep] & finite
@@ -174,6 +186,7 @@ class LowResDataset(Dataset):
 
         # ── Preload filtered, windowed arrays into RAM (dataset order) ──
         self._flux = np.ascontiguousarray(flux[self.valid_indices])    # (n, Lwin) raw f_nu
+        self._err = np.ascontiguousarray(err[self.valid_indices])      # (n, Lwin) raw f_nu
         self._valid = np.ascontiguousarray(valid[self.valid_indices])  # (n, Lwin) bool
         for c in _META_COLS:
             setattr(self, c, meta[c][self.valid_indices])
@@ -192,9 +205,11 @@ class LowResDataset(Dataset):
                                         (f_nu) if use_jansky=True
             wavelength: Tensor (Lwin,)  observed-frame wavelength in microns
             valid_mask: Tensor (Lwin,)  bool, the `valid_spec` reduction flag
+            err:        Tensor (Lwin,)  per-pixel error in the same units as flux
             redshift:   scalar Tensor, z_best (downstream analysis only)
         """
         flux       = self._flux[idx].copy()       # raw f_nu (uJy)
+        err        = self._err[idx].copy()        # raw f_nu (uJy)
         wavelength = self.wave                     # shared grid (Lwin,)
 
         # Authoritative per-pixel validity from the `valid_spec` column
@@ -203,12 +218,14 @@ class LowResDataset(Dataset):
 
         if not self.use_jansky:
             # f_lambda ∝ f_nu / λ². Wavelength is observed-frame µm, finite & >0,
-            # the 1/λ² shape matters — c folded to 1.
+            # the 1/λ² shape matters — c folded to 1. err scales the same way.
             flux = flux / (wavelength ** 2)
+            err = err / (wavelength ** 2)
 
         return {
             "flux":       torch.from_numpy(flux),
             "wavelength": torch.from_numpy(wavelength.copy()),
             "valid_mask": torch.from_numpy(valid_mask),
+            "err":        torch.from_numpy(err),
             "redshift":   torch.tensor(np.float32(self.z_best[idx])),
         }

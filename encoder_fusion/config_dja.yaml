@@ -7,10 +7,10 @@ seed_everything: 42
 model:
   latent_dim: 256
   temperature: 0.1
-  lr: 2.0e-5          # peak LR
+  lr: 1.0e-3          # peak LR — best of the {2e-5, 3e-4, 1e-3} sweep (2e-5 underfit)
   weight_decay: 0.04
   betas: [0.9, 0.95]
-  warmup_steps: 300
+  warmup_steps: 1000  # ~55 epochs to peak (18 steps/epoch); sized for the 1e-3 LR
   min_lr: 1.0e-6
 
   modalities:
@@ -19,34 +19,39 @@ model:
       hidden_dim: [512, 256]
       pool: attention     # options: mean, max, meanmax, attention, cls (cls → point modality_keys at the cls dataset)
       num_heads: 8
-      stats_dim: 2        # inject catalog [phot_f150w_tot_1, _etot_1] after pooling; null = off
+      stats_dim: 2                       # inject raw-cutout [mean, std] after pooling; null = off
+      stats_scale: [0.001397, 0.01009]   # per-column asinh reference (median|.| of the raw crop stats)
     spectrum:
-      input_dim: null     # auto-detected per-token dim from spectrum_patch_embed (→ 64)
+      input_dim: null     # auto-detected per-token dim from spectrum_patch_embed (→ 128)
       hidden_dim: [128, 256]
       pool: attention     # options: mean, max, meanmax, attention, cls (cls → point modality_keys at the cls dataset)
       num_heads: 4
-      stats_dim: 2        # inject per-sample [mean, std] (absolute flux scale) after pooling; null = off
+      stats_dim: 2                       # inject raw-flux [mean, std] after pooling; null = off
+      stats_scale: [0.02695, 0.0138]     # per-column asinh reference (median|.| of the raw f_lambda stats)
 
 # ──────────────────────────────────────────────────────────
-# Data  (token-level embeddings written by train_dja.ipynb)
+# Data  (token-level embeddings written by data/survey/crossmatch/compute_embeddings.py)
 # ──────────────────────────────────────────────────────────
 data:
-  h5_path: embeddings.h5          # standalone embeddings file written by train_dja.ipynb
+  h5_path: ../data/crossmatched/embeddings_f150w.h5   # DJA×F150W crossmatch, 4 surveys
   modality_keys:
     # For pool: cls, point the modality at its CLS dataset (2-D, N×D).
-    image:    image_patch_embed     # [image_patch_embed or image_cls_embed](N, 512)
-    spectrum: spectrum_patch_embed  # [spectrum_patch_embed or spectrum_cls_embed](N, Nspec, 64)
+    image:    image_patch_embed     # [image_patch_embed or image_cls_embed](N, 529, 512)
+    spectrum: spectrum_patch_embed  # [spectrum_patch_embed or spectrum_cls_embed](N, 27, 128)
   token_mask_keys:
-    spectrum: spectrum_token_mask   # (N, Nspec) bool; image patches are all valid
+    spectrum: spectrum_token_mask   # (N, 27) bool; image patches are all valid
   stats_keys:
-    spectrum: spectrum_stats        # (N, 2) per-sample [mean, std]; injected after pooling
-    image:    image_stats           # (N, 2) catalog [f150w_tot, f150w_etot]; injected after pooling
+    spectrum: spectrum_stats        # (N, 2) raw f_lambda [mean, std]; injected after pooling
+    image:    image_stats           # (N, 2) raw centre-crop [mean, std]; injected after pooling
+  # One spectrum can match cutouts in several surveys → duplicate dja_id rows.
+  # Group the split by id so a spectrum never straddles train/val.
+  group_key: id
   batch_size: 512
   num_workers: 4
   train_val_split: 0.9
   modality_mask_prob: 0.05   # set > 0 (e.g. 0.1) to randomly mask modalities during training
-  min_sn50: 1             # exclude spectra with sn50  (mirrors LowResPT min_sn50)
-  frac_valid_pix: 0.5     # Keep spectra whose valid-token fraction > (mirrors LowResPT frac_valid_pix).
+  min_sn50: 1             
+  frac_valid_pix: 0.5     # keep spectra whose valid-token fraction > 0.5 (mirrors LowResPT frac_valid_pix)
 
 
 # ──────────────────────────────────────────────────────────
@@ -69,7 +74,7 @@ trainer:
     - class_path: model.callbacks.EpochPrinter
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
-        monitor: val_R@10        # retrieval is the goal; R@10 is smoother than R@1
+        monitor: val_R@10        # retrieval is the goal; val_loss can rise while R@10 keeps climbing
         mode: max
         save_top_k: 3
         save_last: true

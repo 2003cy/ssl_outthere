@@ -1,15 +1,15 @@
 """Linear-probe the frozen jwst_dino teacher backbone on COSMOS morphology.
 
 Mirrors astrodino's benchmark/linearprobe (linear_probe_morph.ipynb) end-to-end, but
-for the jwst_dino stack: builds the ViT teacher from the training yaml, loads a
-``teacher_checkpoint.pth`` (the {"teacher": state_dict} dumped by ExportTeacherBackbone),
-extracts CLS embeddings over CosmosMorphDataset (labels cross-matched from ml_morph at
-load time), then fits a logistic-regression probe and reports accuracy / macro-F1 /
-per-class report / confusion matrix.
+for the jwst_dino stack: loads the teacher backbone from a Lightning ``*.ckpt``
+(hyperparameters travel inside the ckpt), extracts CLS embeddings over
+CosmosMorphDataset (labels cross-matched from ml_morph at load time), then fits a
+logistic-regression probe and reports accuracy / macro-F1 / per-class report /
+confusion matrix.
 
 Run:
     python linear_probe.py \
-      --weights ../../outputs/jwst_dino_ps6_st3/version_2/eval/146740/teacher_checkpoint.pth \
+      --weights ../../outputs/jwst_dino_ps6_st3/version_6/checkpoints/<epoch>.ckpt \
       --morph-catalog ../../../../data/survey/cosmos_2025/COSMOSWeb_mastercatalog_v1_ml_morph.fits \
       --balanced --samples-per-class 4000
 """
@@ -45,8 +45,7 @@ def extract_embeddings(net, loader, device):
 def main():
     p = argparse.ArgumentParser(description="jwst_dino COSMOS morphology linear probe.")
     p.add_argument("--weights", required=True,
-                   help="Lightning *.ckpt (loaded via load_from_checkpoint) or dinov2 teacher_checkpoint.pth")
-    p.add_argument("--config", default=os.path.join(_HERE, "..", "..", "jwst_dino.yaml"))
+                   help="Lightning *.ckpt (loaded via JWST_DINO.load_from_checkpoint)")
     p.add_argument("--root", default="~/ssl_outthere/data/image")
     p.add_argument("--morph-catalog", required=True)
     p.add_argument("--filter", default="f150w")
@@ -66,7 +65,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
 
-    net = load_teacher_backbone(args.weights, device, config_path=args.config)
+    net = load_teacher_backbone(args.weights, device)
     crop_size = args.crop_size or net.crop_size
 
     ds = CosmosMorphDataset(

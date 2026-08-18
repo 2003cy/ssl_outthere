@@ -113,34 +113,52 @@ class StatsEncoder(nn.Module):
     """Encode per-sample absolute-scale stats into a pooled-space vector to ADD
     after pooling.
 
-    Motivation: token-sequence encoders (e.g. LowResPT) normalise each sample to
-    N(0, 1) before tokenising, so the patch tokens carry only the *shape* of the
-    signal — the absolute flux scale (brightness) is gone. The image side keeps
-    its absolute scale, so re-injecting the dropped per-sample (mean, std) lets
-    the contrastive head align on brightness too.
+    Both encoders normalise away the absolute flux scale before tokenising, so
+    their patch tokens carry only the *shape* of the signal. Each modality's raw
+    per-sample (mean, std) — measured on the raw flux, before any per-sample
+    normalisation — is re-injected here so the contrastive head can align on
+    brightness too.
 
-    asinh compresses the multi-decade dynamic range of f_lambda mean/std (and
-    tolerates sign/zero, unlike log); BatchNorm1d then standardises each stat
-    column with running statistics, so the downstream Linear sees ~unit-scale
-    inputs regardless of the raw flux units.
+    Each stat column is divided by a fixed per-column reference ``stats_scale``
+    and passed through asinh, which is linear near zero and logarithmic beyond
+    it: with the reference set near the column median the transform compresses
+    the multi-decade flux range about its centre. asinh also tolerates zero and
+    negative values (sky-dominated cutouts, noisy spectra), unlike log. The
+    transform is elementwise and sample-independent, so a bad row cannot affect
+    any other row in the batch.
     """
 
-    def __init__(self, stats_dim: int, out_dim: int):
+    def __init__(
+        self,
+        stats_dim: int,
+        out_dim: int,
+        stats_scale: Optional[Union[float, list]] = None,
+    ):
         super().__init__()
-        self.norm = nn.BatchNorm1d(stats_dim)
+        if stats_scale is None:
+            scale = torch.ones(stats_dim)
+        elif isinstance(stats_scale, (int, float)):
+            scale = torch.full((stats_dim,), float(stats_scale))
+        else:
+            scale = torch.tensor([float(v) for v in stats_scale])
+            if scale.numel() != stats_dim:
+                raise ValueError(
+                    f"stats_scale has {scale.numel()} entries but stats_dim={stats_dim}."
+                )
+        if not bool((scale > 0).all()):
+            raise ValueError(f"stats_scale entries must be > 0, got {scale.tolist()}.")
+        self.register_buffer("stats_scale", scale)
         self.proj = nn.Linear(stats_dim, out_dim)
         nn.init.trunc_normal_(self.proj.weight, std=0.02)
         nn.init.zeros_(self.proj.bias)
 
     def forward(self, stats: Tensor) -> Tensor:
         """stats: (B, stats_dim) → (B, out_dim)."""
-        # Some modalities (e.g. image f150w photometry) have missing entries (NaN)
-        # for samples whose modality IS available, so they aren't caught by the
-        # caller's ~avail zeroing. Impute to 0 here so a NaN row can't poison the
-        # BatchNorm batch statistics for the whole batch.
+        # A modality can be available for a sample while an individual stat is
+        # NaN, so those entries are not caught by the caller's ~avail zeroing.
+        # Impute to 0, which asinh maps to 0 (no injection for that column).
         s = torch.nan_to_num(stats)
-        s = torch.asinh(s)
-        s = self.norm(s)
+        s = torch.asinh(s / self.stats_scale)
         return self.proj(s)
 
 
@@ -243,6 +261,7 @@ class MultimodalFusion(nn.Module):
         pool: Optional[str] = None,
         num_heads: int = 4,
         stats_dim: Optional[int] = None,
+        stats_scale: Optional[Union[float, list]] = None,
     ) -> None:
         """Add (or overwrite) the projector for a modality.
 
@@ -255,6 +274,11 @@ class MultimodalFusion(nn.Module):
                         side-feature of this width (e.g. 2 for [mean, std]) into
                         the pooled space; forward() ADDs it after pooling. None
                         → no stats injection for this modality.
+            stats_scale: Per-column reference value each stat is divided by
+                        before the asinh stretch — a scalar broadcast to all
+                        columns, or a list of length stats_dim. Set it near each
+                        column's median so the stretch compresses about the bulk
+                        of the distribution. None → 1.0 (no rescaling).
             pool:       Token-pooling strategy applied to a (B, T, input_dim) token
                         sequence before the projector. All strategies respect the
                         per-modality valid-token mask passed to forward():
@@ -293,7 +317,7 @@ class MultimodalFusion(nn.Module):
             pooled_dim = input_dim * POOL_OUT_MULT[pool]
         self.projectors[name] = ModalityProjector(pooled_dim, self.latent_dim, hidden_dim)
         if stats_dim is not None:
-            self.stats_encoders[name] = StatsEncoder(stats_dim, pooled_dim)
+            self.stats_encoders[name] = StatsEncoder(stats_dim, pooled_dim, stats_scale)
 
     def forward(
         self,
@@ -348,10 +372,9 @@ class MultimodalFusion(nn.Module):
                 m = masks.get(name)
                 kpm = ~m if m is not None else None              # PyTorch: True = ignore
                 x = self.pools[name](x, key_padding_mask=kpm)    # (B, d_in)
-            # Inject per-sample side-feature (e.g. spectrum [mean, std]) in pooled
-            # space. Zero the stats of missing/masked rows first so their NaNs (or
-            # arbitrary values) can't poison BatchNorm's batch statistics; those
-            # rows are zeroed wholesale below anyway.
+            # Inject per-sample side-feature (e.g. [mean, std] of the raw flux) in
+            # pooled space. Missing/masked rows carry arbitrary values, so zero
+            # them; those rows are zeroed wholesale below anyway.
             if name in self.stats_encoders and name in stats:
                 s = stats[name].clone()
                 s[~avail] = 0.0

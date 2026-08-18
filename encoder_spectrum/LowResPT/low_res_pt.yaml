@@ -3,26 +3,27 @@ model:
   num_layers: 8
   num_heads: 4
   mlp_ratio: 4.0
-  dropout: 0.1
+  dropout: 0.05
   patch_size: 4
   stride: 2
   patch_invalid_threshold: 0.25
-  mask_ratio: 0.5
+  mask_ratio: 0.6
   min_unmasked: 4
-  max_line_blocks: 1
-  num_line_detect: 3  # detect the top N strongest lines
   continuous_patch_length: 2
-  line_prominence: 1.2
-  min_std: 0.02
-  use_patch_stats: true  
+  # Emission-line-aware masking (biases WHICH tokens are masked; no loss weight).
+  max_line_blocks: 0       # 0 = pure random masking; >0 = prioritize masking emission lines
+  num_line_detect: 3       # detect top-N strongest lines, mask max_line_blocks of them at random
+  line_prominence: 1.2     # peak prominence threshold (normalised-flux units)
+  use_patch_stats: true
   decoder_hidden_dims: [] #no hidden dim -> linear decoder
-  line_loss_weight: 3.0
-  selected_mask_prob:  0.95  #probability of masking from "selected" pool
+  loss_weighting: invvar   # invvar = inverse-variance (1/err²) token weighting; none = uniform MSE
+  err_weight_sigma_min: 0.1  # floor on token noise variance before inverting (caps max weight)
+  selected_mask_prob:  1  #probability of masking from "selected" pool
   lr: 2.0e-4
   weight_decay: 0.004
   betas: [0.9, 0.95]
   warmup_steps: 1000
-  min_lr: 1.0e-5
+  min_lr: 1.0e-6
 
 data:
   fits_path: /home/yacheng/ssl_outthere/data/spectrum/DJA_spectra_v4.5.fits
@@ -33,11 +34,12 @@ data:
   # Grade / obs-fraction pre-selection (previously baked into the HDF5 build).
   grades: [1, 2, 3]
   #min_obs_frac: null
-  min_sn50: 0.0
+  min_sn50: null
   min_redshift: null
   max_redshift: null   # null = no upper-z cut (keep all z > min_redshift)
   # false (default) = convert flux to f_lambda (∝ f_nu/λ²); true = raw uJy (f_nu)
   use_jansky: false
+  err_column: full_err   # per-pixel error column for inverse-variance weighting (full_err | err)
   # Observed-frame wavelength window (µm) — cuts each spectrum to this range at
   # the dataset level AND sets the positional-encoding reference range.
   wl_ref_min: 1
@@ -49,13 +51,13 @@ trainer:
   enable_progress_bar: false
   accelerator: gpu
   devices: [0]
-  precision: 16-mixed
+  precision: bf16-mixed   # bf16 avoids fp16 underflow in the 1/σ² err-weight computation
   log_every_n_steps: 10   #
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
     init_args:
       save_dir: outputs/
-      name: low_res_pt_1_2_micron_noz_cut
+      name: low_res_pt_1_2_micron_noz_cut_tokenweight_lineaware
   callbacks:
     - class_path: callbacks.EpochPrinter
     - class_path: callbacks.PlotMetrics
@@ -68,5 +70,5 @@ trainer:
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_hid_loss
-        patience: 80
+        patience: 100
         mode: min
