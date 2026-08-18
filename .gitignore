@@ -52,3 +52,9 @@ data/crossmatched/
 # scratch analysis outputs
 tmp_new/
 test_figure/
+
+# experiment tracking and notebook caches
+wandb/
+**/wandb/
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
