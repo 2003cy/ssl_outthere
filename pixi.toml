@@ -44,7 +44,10 @@ wandb = ">=0.26.1,<0.27"
 # Activation — prepend pixi env lib so newer libstdc++ shadows the system one
 # ---------------------------------------------------------------------------
 [activation]
-env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH" }
+# SPS_HOME points at the FSPS data files (SPECTRA/ISOCHRONES/...), which the
+# python-fsps wheel does not ship. The checkout must be the FSPS commit pinned by
+# python-fsps 0.4.8 (cconroy20/fsps @ 82a8735); `pixi run fetch-fsps` creates it.
+env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH", SPS_HOME = "/nexus/posix0/MIA-astro-env/ivemo/yacheng/fsps" }
 
 # ---------------------------------------------------------------------------
 # PyPI dependencies (shared, CUDA-version-agnostic)
@@ -88,6 +91,14 @@ ssl_outthere = {path = ".", editable = true}
 [tasks]
 # Register the (modern, default) pixi env as a Jupyter kernel
 register-kernel = "python -m ipykernel install --user --name ssl_outthere --display-name 'ssl_outthere (pixi)'"
+
+# Clone the FSPS data files into SPS_HOME at the commit python-fsps 0.4.8 pins.
+# ~3.6 GB, so it lives outside the repo; skips silently if already present.
+fetch-fsps = """
+test -f "$SPS_HOME/data/emlines_info.dat" \
+  || (git clone https://github.com/cconroy20/fsps.git "$SPS_HOME" \
+      && git -C "$SPS_HOME" checkout 82a873508d500ca353bbb922459bf928498f7a72)
+"""
 
 # ---------------------------------------------------------------------------
 # meta feature — Meta's DINOv2 / astrodino ONLY (cu117, torch 2.0.1, A100/sm80).
@@ -139,6 +150,14 @@ lightning    = {version = ">=2.5,<2.6", extras = ["extra"]}
 torchmetrics = ">=1.4"
 matplotlib  = ">=3.5"
 h5py        = ">=3.0"
+# Prospector SED fitting. Kept on the `modern` feature rather than in the shared
+# [pypi-dependencies] so the meta/h100 (torch 2.0.1) envs are left untouched.
+# fsps ships a manylinux wheel, so nothing is compiled, but it needs the FSPS
+# data files at SPS_HOME (see [activation] and the fetch-fsps task).
+astro-prospector = ">=1.4,<2"
+astro-sedpy      = ">=0.4"       # filter/photometry backend imported by prospect.models
+fsps             = ">=0.4.8"
+dynesty          = ">=2.1"       # nested sampler used by prospect.fitting
 
 [feature.modern.dependencies]
 reproject = ">=0.20.0,<0.21"
