@@ -1,147 +1,102 @@
-"""Multi-process Optuna launcher.
+"""Launch / resume the LowResPT Optuna study.
 
-Spawns N worker processes that share one SQLite study (concurrent writes are
-safe). Each worker runs `n_trials_per_worker` trials, picking unseen param
-combinations from the TPE sampler.
+    python optuna/launch_study.py --study-name r1 --n-trials 40
 
-Examples:
+The study lives in optuna/studies/<name>/study.db (sqlite). Re-running the same
+command resumes it; running it again in another shell (optionally with a
+different --gpu) adds a worker to the same study -- sqlite handles the
+concurrency. When running more than one worker, pin threads
+(OMP_NUM_THREADS=2) so the workers' Lasso paths don't fight over every core.
 
-    # First time — create and run with 4 parallel workers, 100 trials total
-    python launch_study.py \
-        --study-name sweep_v1 \
-        --n-workers 4 \
-        --n-trials  100 \
-        --max-epochs 200
-
-    # Resume / add more trials to the same study
-    python launch_study.py --study-name sweep_v1 --n-workers 4 --n-trials 50
-
-    # Inspect live progress in another shell:
-    optuna-dashboard sqlite:///optuna/studies/sweep_v1/study.db
+Objective = best redshift-probe sigma_NMAD per trial (minimize); MedianPruner
+cuts weak trials early using the per-N-epoch reports.
 """
 
-from __future__ import annotations
-
 import argparse
-import math
 import os
-import sys
 import time
-import yaml
-import multiprocessing as mp
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-
-import optuna
-from optuna.samplers import TPESampler
-from optuna.pruners import MedianPruner
-
-from optuna_train import make_objective, load_base_cfg
-
-
-def _worker(worker_id: int, args, study_dir: Path):
-    # Pin each worker to one GPU (set CUDA_VISIBLE_DEVICES *before* importing torch in train code)
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    # Optional: less contention on the small dataloader pool
-    os.environ.setdefault("OMP_NUM_THREADS", "2")
-
-    storage = f"sqlite:///{study_dir / 'study.db'}"
-    study = optuna.load_study(
-        study_name=args.study_name,
-        storage=storage,
-    )
-    objective = make_objective(
-        base_cfg_path=Path(args.base_config),
-        study_dir=study_dir,
-        max_epochs=args.max_epochs,
-        early_stop_patience=args.patience,
-    )
-    n = math.ceil(args.n_trials / args.n_workers)
-    print(f"[worker {worker_id}] starting, target {n} trials, gpu={args.gpu}", flush=True)
-    study.optimize(objective, n_trials=n, gc_after_trial=True,
-                   show_progress_bar=False, catch=())
-    print(f"[worker {worker_id}] done", flush=True)
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--study-name", required=True)
-    ap.add_argument("--n-workers", type=int, default=4)
-    ap.add_argument("--n-trials",  type=int, default=100,
-                    help="Total trials across all workers")
-    ap.add_argument("--max-epochs", type=int, default=200)
-    ap.add_argument("--patience",   type=int, default=30)
-    ap.add_argument("--gpu",        type=str, default="0",
-                    help="CUDA_VISIBLE_DEVICES value for every worker")
-    ap.add_argument("--base-config", type=str,
-                    default=str(HERE / "configs" / "base.yaml"))
+    ap.add_argument("--n-trials", type=int, default=40)
+    ap.add_argument("--timeout", type=float, default=None,
+                    help="seconds; stop when reached even if n-trials is not met")
+    ap.add_argument("--max-epochs", type=int, default=None,
+                    help="override trainer.max_epochs from base.yaml (smoke tests)")
+    ap.add_argument("--probe-every", type=int, default=None,
+                    help="override probe.every_n_epochs from base.yaml (smoke tests)")
+    ap.add_argument("--gpu", type=str, default="0", help="CUDA_VISIBLE_DEVICES for this worker")
+    ap.add_argument("--base-config", type=str, default=str(HERE / "configs" / "base.yaml"))
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--startup-trials", type=int, default=10)
+    # 180, so the first pruning decision lands at epoch 199. Two reasons: a
+    # full-length dry run showed the objective is not monotonic (it degrades
+    # between epochs ~39 and ~79 while the learning rate ramps), and
+    # warmup_steps is now searched up to 2000 steps = epoch 95, after which a
+    # run still needs ~200 epochs of cosine decay to approach its best. Judging
+    # earlier would systematically cut the long-warmup configurations.
+    ap.add_argument("--warmup-epochs", type=int, default=180,
+                    help="no trial is pruned before this epoch")
     args = ap.parse_args()
 
+    # Pin the GPU before torch is imported (via optuna_train)
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+    import optuna
+    from optuna.pruners import MedianPruner
+    from optuna.samplers import TPESampler
+
+    import sys
+    sys.path.insert(0, str(HERE))
+    from optuna_train import load_base_cfg, make_objective
+
     study_dir = HERE / "studies" / args.study_name
-    study_dir.mkdir(parents=True, exist_ok=True)
-    (study_dir / "trials").mkdir(exist_ok=True)
+    (study_dir / "trials").mkdir(parents=True, exist_ok=True)
     storage = f"sqlite:///{study_dir / 'study.db'}"
 
-    # Create-or-load the study (idempotent)
+    cfg = load_base_cfg(Path(args.base_config))
+    if args.probe_every is not None:
+        cfg.setdefault("probe", {})["every_n_epochs"] = args.probe_every
+    interval = cfg.get("probe", {}).get("every_n_epochs", 20)
+
     study = optuna.create_study(
         study_name=args.study_name,
         storage=storage,
-        direction="minimize",
+        direction="minimize",                       # sigma_NMAD, lower is better
         sampler=TPESampler(seed=args.seed, multivariate=True, group=True,
-                           n_startup_trials=10),
-        pruner=MedianPruner(n_startup_trials=10, n_warmup_steps=20, interval_steps=5),
+                           n_startup_trials=args.startup_trials),
+        # steps are epochs: no pruning before --warmup-epochs, then a decision at
+        # every probe report.
+        pruner=MedianPruner(n_startup_trials=args.startup_trials,
+                            n_warmup_steps=args.warmup_epochs,
+                            interval_steps=interval),
         load_if_exists=True,
     )
-    # Snapshot launch metadata for reproducibility
-    meta = {
-        "study_name": args.study_name,
-        "n_workers":  args.n_workers,
-        "n_trials":   args.n_trials,
-        "max_epochs": args.max_epochs,
-        "patience":   args.patience,
-        "gpu":        args.gpu,
-        "base_config": args.base_config,
-        "seed":       args.seed,
-        "started":    time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    (study_dir / "launch_meta.yaml").write_text(yaml.safe_dump(meta, sort_keys=False))
-    # Sanity-check base config exists
-    load_base_cfg(Path(args.base_config))
 
-    print(f"Study      : {args.study_name}")
-    print(f"Storage    : {storage}")
-    print(f"Workers    : {args.n_workers}  × ~{math.ceil(args.n_trials/args.n_workers)} trials each")
-    print(f"Max epochs : {args.max_epochs}    Patience : {args.patience}")
-    print(f"GPU        : {args.gpu}")
-    print(f"Dashboard  : optuna-dashboard {storage}")
+    objective = make_objective(Path(args.base_config), study_dir,
+                               max_epochs=args.max_epochs,
+                               probe_every=args.probe_every)
+    print(f"[{time.strftime('%H:%M:%S')}] study '{args.study_name}' gpu={args.gpu} "
+          f"target {args.n_trials} trials -> {storage}", flush=True)
 
-    # Spawn workers (use spawn — CUDA-safe)
-    ctx = mp.get_context("spawn")
-    procs = []
-    for wid in range(args.n_workers):
-        p = ctx.Process(target=_worker, args=(wid, args, study_dir))
-        p.start()
-        procs.append(p)
-        time.sleep(2)   # stagger CUDA init
+    # A worker dying mid-trial is recoverable: the trial is recorded FAIL and the
+    # sweep continues rather than taking the process down.
+    study.optimize(objective, n_trials=args.n_trials, timeout=args.timeout,
+                   gc_after_trial=True, catch=(RuntimeError, ValueError, TypeError))
 
-    exit_code = 0
-    for p in procs:
-        p.join()
-        if p.exitcode != 0:
-            exit_code = p.exitcode
-
-    # Final summary
     try:
-        best = study.best_trial
-        print(f"\n=== BEST trial #{best.number}  val_loss={best.value:.4f} ===")
-        for k, v in best.params.items():
-            print(f"  {k:>18} = {v}")
+        print(f"\n=== best trial #{study.best_trial.number}  "
+              f"sigma_NMAD={study.best_value:.4f} ===")
+        for k, v in study.best_params.items():
+            print(f"  {k}: {v}")
     except ValueError:
-        print("No completed trials.")
-    sys.exit(exit_code)
+        print("\nno completed trials")
 
 
 if __name__ == "__main__":

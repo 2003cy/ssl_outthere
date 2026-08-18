@@ -21,15 +21,19 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# (train column, val column or None, panel title). LowResPT names train terms
-# ``*_mse`` and the matching val terms ``*_loss``, so the pairing is explicit.
+# (train column, val column or None, panel title). Title format:
+# "<description> (<exact logged CSV column name(s)>) [mse]". The [mse] tag marks an
+# (unweighted) mean-squared-error term. Caveat: with loss_weighting=invvar both
+# train_loss/val_loss and the hid/vis losses are INVERSE-VARIANCE weighted MSE,
+# so they are not directly comparable to the unweighted train_full_mse /
+# val_hid_mse_unw / line / continuum reference terms.
 _LOSS_PANELS = [
-    ("train_loss",     "val_loss",     "total loss"),
-    ("train_hid_mse",  "val_hid_loss", "hidden tokens (masked recon)"),
-    ("train_vis_mse",  "val_vis_loss", "visible tokens"),
-    ("train_full_mse", None,           "full reconstruction"),
-    ("train_line_mse", None,           "line region"),
-    ("train_cont_mse", None,           "continuum region"),
+    ("train_loss",     "val_loss",     "total loss (train_loss / val_loss) [mse]"),
+    ("train_hid_mse",  "val_hid_loss", "hidden tokens (masked recon) (train_hid_mse / val_hid_loss) [mse]"),
+    ("train_vis_mse",  "val_vis_loss", "visible tokens (train_vis_mse / val_vis_loss) [mse]"),
+    ("train_full_mse", "val_hid_mse_unw", "unweighted recon (train_full_mse / val_hid_mse_unw) [mse]"),
+    ("train_line_mse", "val_hid_line_loss", "line region (train_line_mse / val_hid_line_loss) [mse]"),
+    ("train_cont_mse", "val_hid_cont_loss", "continuum region (train_cont_mse / val_hid_cont_loss) [mse]"),
 ]
 _SMOOTH = 80      # rolling window for the (noisy) per-step train curve
 _SKIP_FIRST = 100  # drop the first logging points (unstable warmup régime);
@@ -88,14 +92,19 @@ def plot_metrics(csv_path: str, out_path: str | None = None, run_name: str | Non
     axes = axes.ravel()
 
     for ax, (tcol, vcol, title) in zip(axes, _LOSS_PANELS):
+        has_pos = False  # only log-scale panels with positive data (a term may be
+                         # identically 0 early in training)
         if tcol in tr.columns and tr[tcol].notna().any():
-            ax.plot(x_tr, tr[tcol], color=_C_TRAIN, alpha=0.12, lw=0.8)
+            ax.plot(x_tr, tr[tcol], color=_C_TRAIN, alpha=0.35, lw=0.9, label="train")
             ax.plot(x_tr, tr[tcol].rolling(_SMOOTH, min_periods=5).mean(),
-                    color=_C_TRAIN, lw=1.8, label="train")
+                    color=_C_TRAIN, lw=1.2, alpha=0.9, label="_nolegend_")
+            has_pos |= bool((tr[tcol] > 0).any())
         if vcol and vcol in va.columns and va[vcol].notna().any():
             ax.plot(va["step"], va[vcol], "o-", color=_C_VAL, ms=4, lw=1.2, label="val")
+            has_pos |= bool((va[vcol] > 0).any())
         ax.set_title(title, pad=22)
-        ax.set_yscale("log")  # recon MSE terms span orders of magnitude
+        if has_pos:
+            ax.set_yscale("log")  # recon MSE terms span orders of magnitude
         ax.legend(loc="best", fontsize=8)
         ax.tick_params(labelsize=8)
 
@@ -103,7 +112,7 @@ def plot_metrics(csv_path: str, out_path: str | None = None, run_name: str | Non
     ax = axes[6]
     if "lr" in tr.columns and tr["lr"].notna().any():
         ax.plot(x_tr, tr["lr"].to_numpy(dtype=float), color="#2ca02c", lw=1.5, label="lr")
-    ax.set_title("lr schedule", pad=22)
+    ax.set_title("lr schedule (lr)", pad=22)
     ax.legend(loc="best", fontsize=8)
     ax.tick_params(labelsize=8)
 
@@ -113,7 +122,7 @@ def plot_metrics(csv_path: str, out_path: str | None = None, run_name: str | Non
                      ("valid_tokens", "valid")]:
         if col in tr.columns and tr[col].notna().any():
             ax.plot(x_tr, tr[col].rolling(_SMOOTH, min_periods=5).mean(), lw=1.4, label=lab)
-    ax.set_title("token counts", pad=22)
+    ax.set_title("token counts (selected_tokens / hidden_tokens / valid_tokens)", pad=22)
     ax.legend(loc="best", fontsize=8)
     ax.tick_params(labelsize=8)
 

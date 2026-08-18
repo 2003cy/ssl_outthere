@@ -15,6 +15,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 
 from .masking import mask_patches
+from .masking_gpu import mask_patches_fast
 from .modules import LayerNorm, TransformerBlock #, _init_by_depth
 
 
@@ -36,17 +37,19 @@ class LowResPT(L.LightningModule):
         # Masking
         mask_ratio: float = 0.40,
         min_unmasked: int = 4,
-        max_line_blocks: int = 3,
-        line_prominence: float = 1.3,
+        # Emission-line-aware masking: detect line peaks and mask up to
+        # max_line_blocks of them per spectrum (0 = pure random masking). Only
+        # biases WHICH tokens are masked (to improve line reconstruction); no
+        # loss weighting is attached — line_mask_token feeds diagnostics only.
+        max_line_blocks: int = 0,
+        line_prominence: float = 1.2,
         # Candidate pool of strongest detected lines; max_line_blocks of them are
-        # masked at random each draw (clamped to >= max_line_blocks). Equal to
-        # max_line_blocks → always mask the strongest lines.
+        # masked at random each draw (clamped to >= max_line_blocks).
         num_line_detect: int = 1,
-        # Length C of each masked block. Each selected anchor (line or random)
-        # expands into a contiguous run of C valid tokens, anchor at a random
-        # position inside it; blocks never overlap. 1 = single-token masking.
+        # Length C of each masked block. Each anchor expands into a contiguous
+        # run of C valid tokens, anchor at a random position inside it; blocks
+        # never overlap. 1 = single-token masking.
         continuous_patch_length: int = 1,
-        min_std: float = 0.1,
         # Wavelength positional encoding — observed-frame reference range (µm).
         # Linked from data.wl_ref_min/max via LightningCLI in trainer.py.
         wl_ref_min: float = 1.0,
@@ -55,18 +58,18 @@ class LowResPT(L.LightningModule):
         # Empty list = linear projection. Default [embed_dim*2] reproduces the
         # original 2-layer GELU head.
         decoder_hidden_dims: Optional[List[int]] = None,
-        # Multiplier on the MSE of line-masked tokens. 1.0 = original uniform MSE;
-        # >1 amplifies line gradients while leaving continuum gradients unchanged
-        # (loss is normalised by pixel count, not weight sum).
-        line_loss_weight: float = 1.0,
-        # Of the tokens picked by mask_patches (line + random), the fraction
+        # Reconstruction-loss weighting on masked tokens. "invvar" weights each
+        # token by inverse noise variance 1/σ² (σ² from per-pixel err propagated
+        # to normalised-flux space and pooled per token); "none" = uniform MSE.
+        loss_weighting: str = "invvar",
+        # Floor on token noise variance σ² before inverting — caps the weight of
+        # the best-measured tokens so a handful don't dominate the gradient.
+        err_weight_sigma_min: float = 0.5,
+        # Of the tokens picked by mask_patches, the fraction
         # that is ACTUALLY zeroed in the encoder input. The remaining
         # (1 - selected_mask_prob) are left visible but STILL contribute to the
         # loss — they teach the head the all-visible regime that val_loss /
-        # recon.ipynb evaluates in, and (unlike supervising every unselected
-        # token) the subdivision inherits the line/continuum mix of the
-        # selection, so line tokens are supervised in both regimes too.
-        # 1.0 = original MAE behaviour.
+        # recon.ipynb evaluates in. 1.0 = original MAE behaviour.
         selected_mask_prob: float = 1.0,
         # If True, concatenate per-patch (mean, std) — computed in globally-
         # normalised flux space — to each patch vector before patch_embed.
@@ -74,6 +77,9 @@ class LowResPT(L.LightningModule):
         # blue/red ends" bias by giving each token explicit local stats.
         # (OmniSpectra-style; arXiv:2601.15351.)
         use_patch_stats: bool = False,
+        # Vectorised block masking (model/masking_gpu.py). Identical constraints,
+        # ~300x faster; line-aware masking falls through to the original.
+        use_fast_masking: bool = False,
         # Optimizer / LR schedule
         lr: float = 2e-4,
         weight_decay: float = 0.01,
@@ -86,6 +92,7 @@ class LowResPT(L.LightningModule):
 
         self.embed_dim = embed_dim
         self.num_layers = num_layers
+        self._mask_fn = mask_patches_fast if use_fast_masking else mask_patches
 
         # Patch embedding: flattened patch vector -> embed_dim.
         # If use_patch_stats, input is [μ_patch, σ_patch] concatenated with the
@@ -191,27 +198,88 @@ class LowResPT(L.LightningModule):
         return pos_emb
 
     @staticmethod
-    def _normalize_flux(
+    def data_stretch(
         flux: Tensor,
         valid_mask: Tensor,
-        min_std: float = 0.1,
-    ) -> Tuple[Tensor, Tensor, Tensor]:
-        """Per-sample normalization using valid pixels only.
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Per-sample arcsinh-stretch normalization using valid pixels only.
+
+        arcsinh(flux / scale), scale = per-sample median |flux| over valid pixels,
+        then z-score over valid pixels. Linear near zero, logarithmic for
+        emission-line spikes; the median scale is robust to those spikes and
+        removes the absolute-flux dependence, so no per-sample std floor is
+        needed. The returned mean/std (injected as the CLS stats token) and the
+        per-patch stats are computed in this post-stretch space.
 
         Returns:
             flux_norm: (B, L) normalized to ~N(0,1) at valid positions, 0 elsewhere.
-            mean:      (B, 1)
-            std:       (B, 1) clipped to min_std
+            mean:      (B, 1) mean of the arcsinh-stretched flux
+            std:       (B, 1)
+            scale:     (B, 1) per-sample arcsinh scale (median |flux|); needed to
+                       propagate per-pixel err into normalised-flux space.
         """
         valid_float = valid_mask.float()
         valid_count = valid_float.sum(dim=1, keepdim=True).clamp(min=1)
 
+        # Per-sample scale = median |flux| over valid pixels (robust to
+        # emission-line spikes); invalid pixels excluded via NaN.
+        masked_abs = flux.abs().masked_fill(~valid_mask, float("nan"))
+        scale = masked_abs.nanmedian(dim=1, keepdim=True).values
+        scale = torch.nan_to_num(scale, nan=1.0).clamp(min=1e-30)
+        flux = torch.arcsinh(flux / scale)
+
         mean = (flux * valid_float).sum(dim=1, keepdim=True) / valid_count
         var  = (((flux - mean) ** 2) * valid_float).sum(dim=1, keepdim=True) / valid_count
-        std  = var.sqrt().clamp(min=min_std)
+        std  = var.sqrt().clamp(min=1e-8)  # divide-by-zero guard only (flat spectra)
 
         flux_norm = (flux - mean) / std * valid_float
-        return flux_norm, mean, std
+        return flux_norm, mean, std, scale
+
+    @staticmethod
+    def err_stretch(flux: Tensor, err: Tensor, scale: Tensor, sd: Tensor) -> Tensor:
+        """Propagate per-pixel error into normalised-flux space (B, L).
+
+        Chain rule through arcsinh(f/scale) then the per-spectrum z-score:
+            d(f_norm)/d(f) = 1 / (scale · √(1+(f/scale)²) · sd)
+        so err_norm = err · that.
+        """
+        return err / (scale * torch.sqrt(1.0 + (flux / scale) ** 2) * sd)
+
+    def _token_weights(
+        self,
+        batch: dict,
+        flux: Tensor,
+        scale: Tensor,
+        sd: Tensor,
+        valid_mask: Tensor,
+        L_used: int,
+    ) -> Optional[Tensor]:
+        """Per-token inverse-variance weights w = 1/max(σ², σ²_min), or None.
+
+        σ² is the per-token noise variance in normalised-flux space: per-pixel
+        err is propagated via err_stretch, then averaged (squared) over the
+        valid, finite, positive-err pixels of each patch. Bad-error pixels (err
+        ≤ 0 or non-finite, ~9% of the data) and invalid pixels are excluded from
+        the average so a single bad pixel does not poison an otherwise-good
+        token. Tokens with no usable pixel get weight 0. Returns None when
+        weighting is disabled or err is absent from the batch.
+        """
+        if self.hparams.loss_weighting != "invvar" or "err" not in batch:
+            return None
+
+        err = batch["err"]                                       # (B, L) f_lambda
+        err_ok = valid_mask & torch.isfinite(err) & (err > 0)    # exclude bad pixels
+        err = torch.where(err_ok, err, torch.zeros_like(err))
+        err_norm = self.err_stretch(flux, err, scale, sd)        # (B, L)
+
+        P, S = self.hparams.patch_size, self.hparams.stride
+        pe2 = (err_norm[:, :L_used].unfold(1, P, S)) ** 2         # (B, N, P)
+        okp = err_ok[:, :L_used].unfold(1, P, S).float()         # (B, N, P)
+        cnt = okp.sum(-1)                                         # (B, N)
+        sig2 = (pe2 * okp).sum(-1) / cnt.clamp(min=1)            # mean err² over ok px
+        sig2 = torch.nan_to_num(sig2, nan=1e6, posinf=1e6)
+        w = 1.0 / torch.clamp(sig2, min=self.hparams.err_weight_sigma_min)
+        return torch.where(cnt > 0, w, torch.zeros_like(w))      # no-usable-px → 0
 
     def _patchify(
         self,
@@ -267,7 +335,7 @@ class LowResPT(L.LightningModule):
         cnt    = vp_f.sum(-1).clamp(min=1)
         mu_p   = (patches * vp_f).sum(-1) / cnt
         var_p  = ((patches - mu_p.unsqueeze(-1)) ** 2 * vp_f).sum(-1) / cnt
-        sig_p  = var_p.sqrt().clamp(min=self.hparams.min_std)
+        sig_p  = var_p.sqrt()
         return torch.stack([mu_p, sig_p], dim=-1)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -307,9 +375,7 @@ class LowResPT(L.LightningModule):
         if self.hparams.use_patch_stats:
             if patch_stats is None:
                 mu_p  = patches.mean(dim=-1)                                   # (B, N)
-                sig_p = patches.std(dim=-1, unbiased=False).clamp(
-                    min=self.hparams.min_std
-                )                                                              # (B, N)
+                sig_p = patches.std(dim=-1, unbiased=False)                    # (B, N)
                 patch_stats = torch.stack([mu_p, sig_p], dim=-1)               # (B, N, 2)
             patches = torch.cat([patches, patch_stats], dim=-1)  # (B, N, P+2)
 
@@ -372,9 +438,7 @@ class LowResPT(L.LightningModule):
         valid_mask = batch["valid_mask"]  # (B, L)
 
         # Per-sample flux normalization
-        flux_norm, mean, std = self._normalize_flux(
-            flux, valid_mask, self.hparams.min_std
-        )
+        flux_norm, mean, std, scale = self.data_stretch(flux, valid_mask)
         stats = torch.cat([mean, std], dim=-1)  # (B, 2)
 
         # Patchify
@@ -384,10 +448,10 @@ class LowResPT(L.LightningModule):
         target = patches.clone()  # (B, N, P) — reconstruction target
         patch_stats = self._compute_patch_stats(patches, valid_patches)  # (B,N,2)
 
-        # Line-aware masking at token level — selects which tokens enter the
-        # loss (line + random). Discard mask_patches' own zeroed patches and
-        # rebuild below after subdividing the selection into hidden vs visible.
-        _, sel_token, line_mask_token = mask_patches(
+        # Line-aware block masking at token level — selects which tokens enter
+        # the loss (line-priority + random). Discard mask_patches' own zeroed
+        # patches and rebuild below after subdividing into hidden vs visible.
+        _, sel_token, line_mask_token = self._mask_fn(
             patches,
             flux_norm[:, :L_used],
             valid_patches,
@@ -404,9 +468,7 @@ class LowResPT(L.LightningModule):
 
         # Subdivide the selected tokens into "hidden" (encoder input zeroed)
         # and "visible" (kept in input). Loss covers BOTH subsets, so the head
-        # is trained in the masked AND the all-visible regimes on the same
-        # line/continuum mix the selection produced — line tokens get visible-
-        # regime supervision too (unlike "supervise all unselected" schemes).
+        # is trained in the masked AND the all-visible regimes.
         p_hide = self.hparams.selected_mask_prob
         if p_hide >= 1.0:
             hide_token = sel_token
@@ -425,17 +487,19 @@ class LowResPT(L.LightningModule):
                            patch_stats=masked_patch_stats)
         recon_patches = out["recon_patches"]  # (B, N, P)
 
-        # Loss: MSE on ALL selected & valid tokens (hidden + visible), with
-        # extra weight on line tokens. Normalise by the unweighted pixel count
-        # so the continuum gradient magnitude is unchanged.
-        loss_mask     = (sel_token & token_valid_mask)                   # (B, N)
-        loss_mask_px  = loss_mask.unsqueeze(-1).expand_as(recon_patches) # (B, N, P)
-        line_weight   = self.hparams.line_loss_weight
-        token_w       = torch.where(line_mask_token, line_weight, 1.0)   # (B, N)
-        weight_px     = (loss_mask.float() * token_w).unsqueeze(-1)      # (B, N, 1)
-
-        n_loss = loss_mask_px.sum().clamp(min=1)
-        loss = ((recon_patches - target) ** 2 * weight_px).sum() / n_loss
+        # Loss: MSE on ALL selected & valid tokens (hidden + visible). With
+        # inverse-variance weighting, each token's patch-summed squared error is
+        # weighted by 1/σ² and the loss is normalised by Σw (so the scale is
+        # invariant to absolute weight magnitude); without it, plain mean MSE.
+        loss_mask = (sel_token & token_valid_mask)                       # (B, N)
+        sq_sum    = ((recon_patches - target) ** 2).sum(-1)             # (B, N)
+        w_tok = self._token_weights(batch, flux, scale, std, valid_mask, L_used)
+        if w_tok is None:
+            P_ = self.hparams.patch_size
+            loss = sq_sum[loss_mask].sum() / (loss_mask.sum().clamp(min=1) * P_)
+        else:
+            wm   = w_tok * loss_mask.float()                            # (B, N)
+            loss = (wm * sq_sum).sum() / wm.sum().clamp(min=1e-8)
 
         # Full-sequence MSE (no_grad): same metric as val_loss, for direct comparison
         with torch.no_grad():
@@ -447,13 +511,12 @@ class LowResPT(L.LightningModule):
                 reduction="sum",
             ) / n_valid_px
 
-        # Split metrics — diagnostics on the selected-token loss pool.
-        # line vs continuum: same as before, on the full selection.
-        # hidden vs visible: lets you see masked-regime vs all-visible-regime
-        # MSE on identically-distributed tokens (the core point of the split).
+        # Split metrics — line vs continuum (diagnose emission-line recon) and
+        # hidden vs visible (masked vs all-visible regime). Diagnostics only; the
+        # loss above is unaffected by line_mask_token.
         with torch.no_grad():
-            cont_mask    = loss_mask & ~line_mask_token                    # (B, N)
             sq_per_token = ((recon_patches - target) ** 2).mean(-1)        # (B, N)
+            cont_mask    = (sel_token & token_valid_mask) & ~line_mask_token
             n_line       = line_mask_token.sum().clamp(min=1).float()
             n_cont       = cont_mask.sum().clamp(min=1).float()
             train_line_mse = (sq_per_token * line_mask_token.float()).sum() / n_line
@@ -488,9 +551,7 @@ class LowResPT(L.LightningModule):
         wavelength = batch["wavelength"]
         valid_mask = batch["valid_mask"]
 
-        flux_norm, mean, std = self._normalize_flux(
-            flux, valid_mask, self.hparams.min_std
-        )
+        flux_norm, mean, std, scale = self.data_stretch(flux, valid_mask)
         stats = torch.cat([mean, std], dim=-1)
 
         patches, wave_token, valid_patches, token_valid_mask, L_used = self._patchify(
@@ -499,10 +560,17 @@ class LowResPT(L.LightningModule):
         target = patches.clone()
         patch_stats = self._compute_patch_stats(patches, valid_patches)
 
-        # Mirror training: line + random selection, then hide/vis split. Mask
-        # decisions are deterministic per (epoch, batch_idx) so val metrics are
-        # reproducible across runs / checkpoints (no run-to-run noise from RNG).
-        _, sel_token, line_mask_token = mask_patches(
+        # Mirror training: random selection, then hide/vis split. BOTH the
+        # selection (mask_patches draws from the global CPU RNG) and the hide/vis
+        # coin are seeded per (epoch, batch_idx), so val masking is fully
+        # reproducible across runs / checkpoints — the same tokens are masked and
+        # the same hide/vis split is drawn every time. The global RNG is saved and
+        # restored around mask_patches so seeding it here does not perturb the
+        # training RNG stream.
+        val_seed  = int(self.current_epoch) * 10_000 + int(batch_idx)
+        rng_state = torch.get_rng_state()
+        torch.manual_seed(val_seed)
+        _, sel_token, line_mask_token = self._mask_fn(
             patches, flux_norm[:, :L_used], valid_patches, token_valid_mask,
             mask_ratio      = self.hparams.mask_ratio,
             min_unmasked    = self.hparams.min_unmasked,
@@ -513,14 +581,13 @@ class LowResPT(L.LightningModule):
             continuous_patch_length = self.hparams.continuous_patch_length,
             num_line_detect = self.hparams.num_line_detect,
         )
+        torch.set_rng_state(rng_state)
 
         p_hide = self.hparams.selected_mask_prob
         if p_hide >= 1.0:
             hide_token = sel_token
         else:
-            g = torch.Generator(device=sel_token.device).manual_seed(
-                int(self.current_epoch) * 10_000 + int(batch_idx)
-            )
+            g = torch.Generator(device=sel_token.device).manual_seed(val_seed)
             coin = torch.rand(sel_token.shape, generator=g, device=sel_token.device)
             hide_token = sel_token & (coin < p_hide)
         vis_token = sel_token & ~hide_token
@@ -533,20 +600,42 @@ class LowResPT(L.LightningModule):
                            patch_stats=masked_patch_stats)
         recon_patches = out["recon_patches"]
 
-        # Unweighted MSE — val is an unbiased physical metric, no line_loss_weight.
+        # Inverse-variance weighted MSE (matches the training objective). With
+        # weighting disabled, falls back to plain mean MSE over each subset.
+        sq_sum       = ((recon_patches - target) ** 2).sum(-1)             # (B, N)
         sq_per_token = ((recon_patches - target) ** 2).mean(-1)             # (B, N)
         sel          = sel_token & token_valid_mask
-        n_sel = sel.sum().clamp(min=1).float()
+        w_tok = self._token_weights(batch, flux, scale, std, valid_mask, L_used)
+
+        def _subset_loss(m: Tensor) -> Tensor:
+            if w_tok is None:
+                return (sq_per_token * m.float()).sum() / m.sum().clamp(min=1).float()
+            wm = w_tok * m.float()
+            return (wm * sq_sum).sum() / wm.sum().clamp(min=1e-8)
+
+        val_loss     = _subset_loss(sel)
+        val_hid_loss = _subset_loss(hide_token)
+        val_vis_loss = _subset_loss(vis_token)
+
+        # Unweighted hidden MSE — physical reference unaffected by the weighting.
         n_hid = hide_token.sum().clamp(min=1).float()
-        n_vis = vis_token.sum().clamp(min=1).float()
+        val_hid_mse_unw = (sq_per_token * hide_token.float()).sum() / n_hid
 
-        val_loss     = (sq_per_token * sel.float()).sum() / n_sel
-        val_hid_loss = (sq_per_token * hide_token.float()).sum() / n_hid
-        val_vis_loss = (sq_per_token * vis_token.float()).sum() / n_vis
+        # Split hidden-token MSE into emission-line anchors vs continuum (both
+        # unweighted) to track how well masked LINES are reconstructed.
+        hid_line   = hide_token & line_mask_token
+        hid_cont   = hide_token & ~line_mask_token
+        n_hid_line = hid_line.sum().clamp(min=1).float()
+        n_hid_cont = hid_cont.sum().clamp(min=1).float()
+        val_hid_line_loss = (sq_per_token * hid_line.float()).sum() / n_hid_line
+        val_hid_cont_loss = (sq_per_token * hid_cont.float()).sum() / n_hid_cont
 
-        self.log("val_loss",     val_loss,     prog_bar=True,  on_step=False, on_epoch=True)
-        self.log("val_hid_loss", val_hid_loss, prog_bar=True,  on_step=False, on_epoch=True)
-        self.log("val_vis_loss", val_vis_loss, prog_bar=False, on_step=False, on_epoch=True)
+        self.log("val_loss",          val_loss,          prog_bar=True,  on_step=False, on_epoch=True)
+        self.log("val_hid_loss",      val_hid_loss,      prog_bar=True,  on_step=False, on_epoch=True)
+        self.log("val_vis_loss",      val_vis_loss,      prog_bar=False, on_step=False, on_epoch=True)
+        self.log("val_hid_mse_unw",   val_hid_mse_unw,   prog_bar=False, on_step=False, on_epoch=True)
+        self.log("val_hid_line_loss", val_hid_line_loss, prog_bar=False, on_step=False, on_epoch=True)
+        self.log("val_hid_cont_loss", val_hid_cont_loss, prog_bar=False, on_step=False, on_epoch=True)
         return val_hid_loss
 
     def test_step(self, batch: dict, batch_idx: int = 0) -> Tensor:
@@ -585,24 +674,30 @@ class LowResPT(L.LightningModule):
     # Downstream embedding API
     # ──────────────────────────────────────────────────────────────────────────
 
-    @torch.no_grad()
-    def embed(
+    def compute_embedding_from_raw_spectrum(
         self,
         flux: Tensor,
         wavelength: Tensor,
         valid_mask: Tensor,
-    ) -> Tensor:
-        """Extract CLS embedding for downstream tasks.
+    ) -> dict:
+        """Encode raw spectra into token embeddings for downstream tasks.
+
+        Runs the full encoder pipeline (data_stretch → patchify → per-patch
+        stats → encode) from raw input, so downstream code never re-implements
+        normalization or patchification. Not wrapped in no_grad: the caller
+        controls the grad context (frozen linear probe vs. fine-tuning the
+        encoder).
 
         Args:
             flux, wavelength, valid_mask: (B, L) — wavelength already rest-frame.
 
-        Returns:
-            cls_embedding: (B, embed_dim)
+        Returns dict with:
+            cls_token:        (B, D)    global CLS embedding
+            patch_token:      (B, N, D) per-patch token embeddings
+            token_valid_mask: (B, N)    bool, True = valid patch token
+            stats:            (B, 2)    per-sample [mean, std] (absolute flux scale)
         """
-        flux_norm, mean, std = self._normalize_flux(
-            flux, valid_mask, self.hparams.min_std
-        )
+        flux_norm, mean, std, _ = self.data_stretch(flux, valid_mask)
         stats   = torch.cat([mean, std], dim=-1)
         patches, wave_token, valid_patches, token_valid_mask, _ = self._patchify(
             flux_norm, wavelength, valid_mask
@@ -610,7 +705,12 @@ class LowResPT(L.LightningModule):
         patch_stats = self._compute_patch_stats(patches, valid_patches)
         x = self.encode(patches, wave_token, token_valid_mask, stats,
                         patch_stats=patch_stats)
-        return x[:, 0, :]  # CLS token: (B, D)
+        return {
+            "cls_token":        x[:, 0, :],
+            "patch_token":      x[:, 1:, :],
+            "token_valid_mask": token_valid_mask,
+            "stats":            stats,
+        }
 
     @torch.no_grad()
     def reconstruct(
@@ -655,9 +755,7 @@ class LowResPT(L.LightningModule):
             stats:            (B, 2)    per-sample [mean, std]
             L_used:           int       pixels used (trailing partial patch dropped)
         """
-        flux_norm, mean, std = self._normalize_flux(
-            flux, valid_mask, self.hparams.min_std
-        )
+        flux_norm, mean, std, _ = self.data_stretch(flux, valid_mask)
         stats = torch.cat([mean, std], dim=-1)
         patches, wave_token, valid_patches, token_valid_mask, L_used = self._patchify(
             flux_norm, wavelength, valid_mask
