@@ -9,9 +9,9 @@ model:
   patch_invalid_threshold: 0.25
   mask_ratio: 0.6
   min_unmasked: 4
-  continuous_patch_length: 1
+  continuous_patch_length: 2
   # Emission-line-aware masking (biases WHICH tokens are masked; no loss weight).
-  max_line_blocks: 1       # 0 = pure random masking; >0 = prioritize masking emission lines
+  max_line_blocks: 0       # 0 = pure random masking; >0 = prioritize masking emission lines
   num_line_detect: 3       # detect top-N strongest lines, mask max_line_blocks of them at random
   line_prominence: 1.2     # peak prominence threshold (normalised-flux units)
   use_patch_stats: true
