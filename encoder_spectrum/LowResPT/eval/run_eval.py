@@ -34,7 +34,7 @@ from data.dataset import LowResDataset          # noqa: E402
 from data.datamodule import LowResDataModule    # noqa: E402
 from eval.probes import knn_zeroshot, lasso_probe, metrics, ridge_probe  # noqa: E402
 
-DEFAULT_FITS = "/home/yacheng/ssl_outthere/data/spectrum/DJA_spectra_v4.5.fits"
+DEFAULT_FITS = str(REPO.parents[1] / "data/spectrum/DJA_spectra_v4.5.fits")
 
 # Cuts that define the redshift-probe sample. `frac_valid_pix=0.9` is a probe-only
 # requirement: near-empty spectra collapse to an identical all-zero embedding and

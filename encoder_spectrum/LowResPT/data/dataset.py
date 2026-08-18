@@ -43,6 +43,9 @@ import torch
 from astropy.io import fits
 from torch.utils.data import Dataset
 
+# encoder_spectrum/LowResPT/data/<this file>  ->  repository root
+_REPO = Path(__file__).resolve().parents[3]
+
 # Scalar metadata columns pulled from the CATALOG HDU and exposed as attributes
 # (dataset order) for downstream notebooks (e.g. group-aware split by objid).
 _META_COLS = (
@@ -103,6 +106,10 @@ class LowResDataset(Dataset):
                 "(use_jansky=True to disable this conversion)"
             )
         self.fits_path = Path(fits_path)
+        if not self.fits_path.is_absolute():
+            # Relative config paths are resolved against the repository root,
+            # so a config does not depend on the working directory.
+            self.fits_path = _REPO / self.fits_path
         if not self.fits_path.exists():
             raise FileNotFoundError(f"FITS file not found: {fits_path}")
 

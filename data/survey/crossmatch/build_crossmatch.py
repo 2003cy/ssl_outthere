@@ -26,7 +26,8 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table, vstack
 import astropy.units as u
 
-PROJECT_ROOT = Path(os.path.expanduser("~/ssl_outthere"))
+# data/survey/crossmatch/<this file>  ->  repository root
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 IMAGE_ROOT   = PROJECT_ROOT / "data/image"
 DJA_FITS     = PROJECT_ROOT / "data/spectrum/DJA_spectra_v4.5.fits"
 OUT_DIR      = PROJECT_ROOT / "data/crossmatched"

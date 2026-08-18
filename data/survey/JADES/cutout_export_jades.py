@@ -34,7 +34,7 @@ single field's mosaic+segmap (~17 GB for GOODS-S), not both.
 from __future__ import annotations
 
 '''
-cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/data/survey/JADES
+cd <repo>/data/survey/JADES
 
 python cutout_export_jades.py \
   --jades-dir . \

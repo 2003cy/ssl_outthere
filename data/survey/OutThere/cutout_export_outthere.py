@@ -36,7 +36,7 @@ convert -> resample -> save shard). reproject is the per-cutout cost.
 from __future__ import annotations
 
 '''
-cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/data/survey/OutThere
+cd <repo>/data/survey/OutThere
 
 python cutout_export_outthere.py \
   --imaging-dir imaging \

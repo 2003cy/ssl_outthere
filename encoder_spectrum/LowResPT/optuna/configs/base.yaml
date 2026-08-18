@@ -17,7 +17,7 @@ model:
   min_lr: 1.0e-6
 
 data:
-  fits_path: /home/yacheng/ssl_outthere/data/spectrum/DJA_spectra_v4.5.fits
+  fits_path: data/spectrum/DJA_spectra_v4.5.fits   # relative to the repository root
   batch_size: 1024
   num_workers: 2
   train_val_split: 0.9

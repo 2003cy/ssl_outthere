@@ -31,7 +31,8 @@ from astropy.io import fits
 from astropy.table import Table
 from tqdm.auto import tqdm
 
-PROJECT_ROOT = Path(os.path.expanduser("~/ssl_outthere"))
+# data/survey/crossmatch/<this file>  ->  repository root
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 IMAGE_ROOT   = PROJECT_ROOT / "data/image"
 DJA_FITS     = PROJECT_ROOT / "data/spectrum/DJA_spectra_v4.5.fits"
 XMATCH_FITS  = PROJECT_ROOT / "data/crossmatched/dja_x_f150w.fits"

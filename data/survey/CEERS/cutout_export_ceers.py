@@ -31,7 +31,7 @@ every worker attaching the same single physical copy.
 from __future__ import annotations
 
 '''
-cd /nexus/posix0/MIA-astro-env/ivemo/yacheng/ssl_outthere/data/survey/CEERS
+cd <repo>/data/survey/CEERS
 
 pixi shell  # (default env)
 

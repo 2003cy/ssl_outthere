@@ -8,7 +8,10 @@ from pathlib import Path
 
 import matplotlib as mpl
 
-ROOT = Path(os.path.expanduser("~/ssl_outthere"))
+# The repository holds the code; the data and the training outputs live beside
+# it in this same checkout. ROOT is taken from this file, so it is correct
+# wherever the repository is cloned.
+ROOT = Path(__file__).resolve().parents[1]
 FIG_DIR = ROOT / "neurips"
 PAPER_DIR = ROOT / "paper/ssl_outthere_paper"
 
@@ -23,7 +26,11 @@ IMAGE_DIR = ROOT / "encoder_image/jwst_dino"
 SPEC_DIR = ROOT / "encoder_spectrum/LowResPT"
 FUSION_DIR = ROOT / "encoder_fusion"
 
-IMG_CKPT = IMAGE_DIR / "outputs/jwst_dino_ps6_st3/version_6/checkpoints/last.ckpt"
+IMG_OUT = IMAGE_DIR / "outputs"
+SPEC_OUT = SPEC_DIR / "outputs"
+FUSION_OUT = FUSION_DIR / "outputs"
+
+IMG_CKPT = IMG_OUT / "jwst_dino_ps6_st3/version_6/checkpoints/last.ckpt"
 
 PIX_SCALE = 0.030  # arcsec per pixel of the common F150W grid
 
