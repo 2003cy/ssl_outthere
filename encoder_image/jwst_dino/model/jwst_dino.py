@@ -11,20 +11,17 @@ everything, the ViT, head and losses are all vendored under model/.
 """
 
 import math
-import os
 from typing import List
 
 import lightning as L
 import torch
 import torch.nn.functional as F
-import yaml
 from torch.optim import AdamW
 
 from .dino_head import DINOHead
 from .losses import DINOLoss, KoLeoLoss, iBOTPatchLoss
 from .vision_transformer import VisionTransformer
 
-_DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "..", "jwst_dino.yaml")
 
 def cosine_sched(step, total, base, final, warmup=0, freeze=0, start=0.0):
     """One closed-form schedule that reproduces every DINOv2 cosine curve.
@@ -393,43 +390,48 @@ class JWST_DINO(L.LightningModule):
         """Teacher CLS embedding for downstream tasks. images: (B, C, H, W)."""
         return self.teacher_backbone(images)["cls"]
 
-    def export_teacher_backbone(self) -> dict:
-        """State dict in the dinov2 'teacher checkpoint' layout used downstream."""
-        return {"teacher": self.teacher_backbone.state_dict()}
+    @torch.no_grad()
+    def compute_embedding_from_raw_image(self, flux) -> dict:
+        """End-to-end teacher embeddings from a RAW cutout (pretraining flux; unit-agnostic).
 
-def load_teacher_backbone(weights_path: str, device="cpu", config_path: str | None = None):
-    """Load the frozen teacher ViT backbone for downstream eval (embeddings, probes).
+        Bundles the model's eval preprocessing so callers never re-implement it:
+        NaN->0, center-crop to global_crops_size, then the training asinh stretch
+        (data.augmentations.AsinhStretch, scale-free so the absolute flux unit does
+        not matter), then the teacher backbone forward.
 
-    Accepts either checkpoint flavor and returns an eval-mode, frozen VisionTransformer
-    whose expected input size is on ``.crop_size`` (call ``net(x)["cls"]`` for the
-    embedding):
+        Args:
+            flux: raw cutout(s), numpy or tensor, shaped (H,W), (B,H,W) or (B,1,H,W).
+        Returns:
+            {"cls": (B, D), "patch": (B, N, D)}.
+        """
+        import numpy as np
+        from torchvision.transforms.functional import center_crop
+        from data.augmentations import AsinhStretch
 
-      *.ckpt — a Lightning ModelCheckpoint: rebuilt via ``JWST_DINO.load_from_checkpoint``
-          (hyperparameters travel inside the ckpt, so no yaml is needed).
-      *.pth  — the dinov2-style ``{"teacher": state_dict}`` dumped by
-          ``export_teacher_backbone`` (backbone only, portable): the ViT is rebuilt from
-          the training yaml at ``config_path`` (default ``jwst_dino.yaml``) and loaded.
+        crop = self.hparams.global_crops_size
+        arr = flux.detach().cpu().numpy() if torch.is_tensor(flux) else np.asarray(flux)
+        arr = np.nan_to_num(arr.astype(np.float32))
+        if arr.ndim == 2:
+            arr = arr[None, None]                                   # (1,1,H,W)
+        elif arr.ndim == 3:
+            arr = arr[:, None]                                     # (B,1,H,W)
+        arr = center_crop(torch.from_numpy(arr), crop).numpy()     # (B,1,crop,crop)
+        stretch = AsinhStretch(return_channel_pos=0)               # Q/scale = training defaults
+        arr = np.stack([stretch(im) for im in arr])                # (B,1,crop,crop)
+        x = torch.from_numpy(arr).to(self.device)
+        return self.teacher_backbone(x)
+
+def load_teacher_backbone(weights_path: str, device="cpu"):
+    """Load the frozen teacher ViT backbone from a Lightning ``*.ckpt`` for downstream
+    eval (embeddings, probes).
+
+    Hyperparameters travel inside the ckpt (``JWST_DINO.load_from_checkpoint``), so no
+    yaml is needed. Returns an eval-mode, frozen VisionTransformer whose expected input
+    size is on ``.crop_size`` (call ``net(x)["cls"]`` for the embedding).
     """
-    if str(weights_path).endswith(".ckpt"):
-        m = JWST_DINO.load_from_checkpoint(weights_path, map_location=device)
-        net, crop = m.teacher_backbone, m.hparams.global_crops_size
-    else:
-        with open(config_path or _DEFAULT_CONFIG) as f:
-            cfg = yaml.safe_load(f)
-        mc, d = cfg["model"], cfg["data"]
-        crop = d["global_crops_size"]
-        net = VisionTransformer(
-            img_size=crop, patch_size=d["patch_size"], patch_stride=d["patch_stride"],
-            in_chans=mc["in_chans"], embed_dim=mc["embed_dim"], depth=mc["depth"],
-            num_heads=mc["num_heads"], mlp_ratio=mc["mlp_ratio"],
-            num_register_tokens=mc["num_register_tokens"], drop_path_rate=0.0,
-            layerscale_init=mc["layerscale_init"],
-        )
-        sd = torch.load(weights_path, map_location="cpu")
-        net.load_state_dict(sd.get("teacher", sd), strict=False)
-
-    net = net.eval().to(device)
+    m = JWST_DINO.load_from_checkpoint(weights_path, map_location=device)
+    net = m.teacher_backbone.eval().to(device)
     for p in net.parameters():
         p.requires_grad = False
-    net.crop_size = crop
+    net.crop_size = m.hparams.global_crops_size
     return net

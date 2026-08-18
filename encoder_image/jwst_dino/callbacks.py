@@ -3,7 +3,6 @@
 import os
 import re
 
-import torch
 from lightning.pytorch.callbacks import Callback
 
 from visualize_metrics import plot_metrics
@@ -54,25 +53,6 @@ class EpochPrinter(Callback):
             f"lr={lr_s}",
             flush=True,
         )
-
-
-class ExportTeacherBackbone(Callback):
-    """Dump the teacher backbone in the dinov2 'teacher checkpoint' layout.
-
-    Fires at the validation cadence (= the checkpoint cadence). The .pth has the
-    {"teacher": state_dict} structure that the existing benchmark /
-    compute_embeddings loaders expect.
-    """
-
-    def on_validation_epoch_end(self, trainer, pl_module):
-        # log_dir is None when logging is suppressed (e.g. fast_dev_run).
-        if trainer.sanity_checking or not trainer.is_global_zero or trainer.log_dir is None:
-            return
-        eval_dir = os.path.join(trainer.log_dir, "eval", str(trainer.global_step))
-        os.makedirs(eval_dir, exist_ok=True)
-        path = os.path.join(eval_dir, "teacher_checkpoint.pth")
-        torch.save(pl_module.export_teacher_backbone(), path)
-        print(f"[ExportTeacherBackbone] saved {path}", flush=True)
 
 
 class PlotMetrics(Callback):
