@@ -47,7 +47,7 @@ wandb = ">=0.26.1,<0.27"
 # SPS_HOME points at the FSPS data files (SPECTRA/ISOCHRONES/...), which the
 # python-fsps wheel does not ship. The checkout must be the FSPS commit pinned by
 # python-fsps 0.4.8 (cconroy20/fsps @ 82a8735); `pixi run fetch-fsps` creates it.
-env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH", SPS_HOME = "/nexus/posix0/MIA-astro-env/ivemo/yacheng/fsps" }
+env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH", SPS_HOME = "$PIXI_PROJECT_ROOT/fsps" }
 
 # ---------------------------------------------------------------------------
 # PyPI dependencies (shared, CUDA-version-agnostic)
@@ -93,7 +93,7 @@ ssl_outthere = {path = ".", editable = true}
 register-kernel = "python -m ipykernel install --user --name ssl_outthere --display-name 'ssl_outthere (pixi)'"
 
 # Clone the FSPS data files into SPS_HOME at the commit python-fsps 0.4.8 pins.
-# ~3.6 GB, so it lives outside the repo; skips silently if already present.
+# ~3.6 GB, git-ignored; skips silently if already present.
 fetch-fsps = """
 test -f "$SPS_HOME/data/emlines_info.dat" \
   || (git clone https://github.com/cconroy20/fsps.git "$SPS_HOME" \

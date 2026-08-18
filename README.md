@@ -89,7 +89,7 @@ DJA NIRSpec prism (DJA_spectra_v4.5.fits, ~42k rows: flux / z_best / sn50 / ...)
 image h5 + spectrum FITS → frozen image/spectrum encoders → token-embedding h5 → encoder_fusion
 ```
 
-**Paths:** configs reference cluster (raven) paths like `/u/yacheng/...`. On other hosts,
+**Paths:** configs reference absolute data paths. On other hosts,
 override the data root rather than editing configs — e.g. the AstroDINO dataset string
 `jwst:split=train:root=<your/images/jwst/>:filter=f150w`, or the `h5_path` in the fusion config.
 

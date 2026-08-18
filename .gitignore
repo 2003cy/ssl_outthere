@@ -59,3 +59,6 @@ wandb/
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
+
+# FSPS data files fetched by `pixi run fetch-fsps` (~3.6 GB)
+fsps/

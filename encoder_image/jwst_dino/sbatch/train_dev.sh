@@ -8,7 +8,7 @@
 #SBATCH --mem=500000
 #SBATCH --output=jwst_dino_dev-%j.log
 #SBATCH --mail-type=none
-#SBATCH --mail-user=yacheng@mpia.de
+
 
 # Dev trial on the gpudev partition (1 node x 4 A100, 10 min walltime). 
 

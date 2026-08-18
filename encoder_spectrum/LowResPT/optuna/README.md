@@ -20,7 +20,7 @@ about whether redshift is linearly decodable from the representation.
 ## Run
 
 ```bash
-cd /home/yacheng/ssl_outthere/encoder_spectrum/LowResPT
+cd encoder_spectrum/LowResPT   # from the repository root
 nohup pixi run -e default python optuna/launch_study.py \
     --study-name r1 --n-trials 200 --timeout 43200 > r1.log 2>&1 &
 ```

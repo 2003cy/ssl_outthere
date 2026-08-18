@@ -8,7 +8,7 @@
 #SBATCH --mem=500000
 #SBATCH --output=jwst_dino_dist-%j.log
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=yacheng@mpia.de
+
 
 # Multi-node x multi-GPU DDP. srun launches tasks-per-node processes per node;
 # Lightning's SLURMEnvironment auto-detects SLURM_PROCID / NTASKS / NODELIST and
