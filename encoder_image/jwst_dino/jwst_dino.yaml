@@ -43,7 +43,7 @@ model:
   official_epoch_length: 1000
 
 data:
-  root: ~/ssl_outthere/data/image/
+  root: ../../data/image/    # relative to encoder_image/jwst_dino, where trainer.py runs
   filter: f150w
   survey: [cosmos, ceers, outthere, jades]   # joint training; per-survey 90/5/5 split
   batch_size: 60   # per-GPU; ~37 GiB peak on 40GB A100 (separate_head=false). x20 GPU = 1200 eff; LR auto-scales

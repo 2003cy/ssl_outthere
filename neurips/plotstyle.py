@@ -30,6 +30,8 @@ IMG_OUT = IMAGE_DIR / "outputs"
 SPEC_OUT = SPEC_DIR / "outputs"
 FUSION_OUT = FUSION_DIR / "outputs"
 
+# Image-encoder checkpoint. This is the run the paper used; set it to your own
+# run directory after pre-training.
 IMG_CKPT = IMG_OUT / "jwst_dino_ps6_st3/version_6/checkpoints/last.ckpt"
 
 PIX_SCALE = 0.030  # arcsec per pixel of the common F150W grid

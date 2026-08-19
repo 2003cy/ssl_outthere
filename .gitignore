@@ -63,3 +63,6 @@ wandb/
 
 # FSPS data files fetched by `pixi run fetch-fsps` (~3.6 GB)
 fsps/
+
+# the model-overview figure shown in README.md
+!docs/model_overview.png

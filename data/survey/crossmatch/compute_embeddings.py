@@ -38,6 +38,7 @@ DJA_FITS     = PROJECT_ROOT / "data/spectrum/DJA_spectra_v4.5.fits"
 XMATCH_FITS  = PROJECT_ROOT / "data/crossmatched/dja_x_f150w.fits"
 OUT_H5       = PROJECT_ROOT / "data/crossmatched/embeddings_f150w.h5"
 
+# Encoder checkpoints of the runs the paper used; set these to your own runs.
 IMG_CKPT  = PROJECT_ROOT / "encoder_image/jwst_dino/outputs/jwst_dino_ps6_st3/version_6/checkpoints/last.ckpt"
 SPEC_CKPT = (PROJECT_ROOT / "encoder_spectrum/LowResPT/outputs/"
              "low_res_pt_1_2_micron_noz_cut_no_lineweight_no_vistoken/version_0/"
