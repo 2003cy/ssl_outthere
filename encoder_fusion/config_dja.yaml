@@ -50,8 +50,8 @@ data:
   num_workers: 4
   train_val_split: 0.9
   modality_mask_prob: 0.05   # set > 0 (e.g. 0.1) to randomly mask modalities during training
-  min_sn50: 1             
-  frac_valid_pix: 0.5     # keep spectra whose valid-token fraction > 0.5 (mirrors LowResPT frac_valid_pix)
+  min_sn50: 0             # 0 disables the cut; align on every crossmatched pair
+  frac_valid_pix: 0.0     # 0 disables the cut; build_crossmatch already requires > 50% valid pixels
 
 
 # ──────────────────────────────────────────────────────────
