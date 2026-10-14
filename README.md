@@ -220,6 +220,6 @@ Every figure and table comes from a notebook in `neurips/`. They share `plotstyl
 
 ## License & citation
 
-MIT (see `LICENSE`). Author: Yang Cheng. Repo: <https://github.com/2003cy/ssl_outthere>.
+MIT (see `LICENSE`). Author: Yang Cheng. Repo: <https://github.com/2003cy/neurips2026_ssl_jwst>.
 
 The image encoder is derived from [AstroCLIP](https://github.com/PolymathicAI/AstroCLIP)'s adaptation of [DINOv2](https://github.com/facebookresearch/dinov2) — please credit those works when using it.
