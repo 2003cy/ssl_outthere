@@ -1,0 +1,68 @@
+# Run from flow/: !python model/flow.py fit --config z_1_3.yaml
+# Data/checkpoint paths are relative to the repository root.
+seed_everything: 0
+
+model:
+  input_dim: 512                    # image CLIP (256) ++ spectrum CLIP (256)
+  features: 5
+  trunk_hidden_dim: 256
+  context_dim: 32
+  dropout: 0.2
+  transforms: 4
+  bins: 8
+  hidden_features: [128, 128]
+  passes: null                     # null = autoregressive; 2 = coupling
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+
+data:
+  embeddings_path: data/crossmatched/embeddings_f150w.h5
+  fits_path: data/spectrum/DJA_spectra_v4.5.fits
+  labels_path: data/crossmatched/jades_prospector_labels.fits
+  # Choose the highest R10 among matching frozen fusion checkpoints.
+  fusion_checkpoint: encoder_fusion/outputs/fusion_dja_image_attn_spectrum_attn/version_*/checkpoints/*R10=*.ckpt
+  target_columns: [log1pz, logmass, logsfr100, gas_logz, av]
+  log_columns: [av]                 # other columns are already in log10 space
+  grades: [1, 2, 3]
+  min_sn50: 0.0                     # keep S/N50 > this value
+  frac_valid_pix: 0.5
+  min_redshift: 1.0                 # z_spec > 1
+  max_redshift: 3.0                 # z_spec <= 3
+  max_gas_logz: 0.30                # inspect posterior/data_label_check.ipynb; null disables this cut
+  z_consistent: true
+  split: [0.60, 0.20, 0.20]         # matches the current notebook's actual split
+  split_seed: 0                    # fixed across ensemble seeds
+  batch_size: 64
+  num_workers: 0
+  embedding_batch_size: 128
+  embedding_device: auto
+
+trainer:
+  max_epochs: 600
+  accelerator: auto
+  devices: 1
+  precision: 32-true
+  gradient_clip_val: 5.0
+  gradient_clip_algorithm: norm
+  enable_progress_bar: false
+  log_every_n_steps: 1
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: outputs/
+      name: flow_jades_z_1_3
+  callbacks:
+    - class_path: flow.model.flow.EpochPrinter
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_nll
+        mode: min
+        save_top_k: 1
+        filename: "epoch={epoch}-val_nll={val_nll:.4f}"
+        auto_insert_metric_name: false
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_nll
+        mode: min
+        patience: 30
+        min_delta: 1.0e-4

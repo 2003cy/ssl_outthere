@@ -1,0 +1,67 @@
+# Run from flow/: !python model/flow.py fit --config full.yaml
+# Same settings as z_1_3.yaml, with no z_spec range cut.
+seed_everything: 0
+
+model:
+  input_dim: 512
+  features: 5
+  trunk_hidden_dim: 256
+  context_dim: 32
+  dropout: 0.2
+  transforms: 4
+  bins: 8
+  hidden_features: [128, 128]
+  passes: null
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+
+data:
+  embeddings_path: data/crossmatched/embeddings_f150w.h5
+  fits_path: data/spectrum/DJA_spectra_v4.5.fits
+  labels_path: data/crossmatched/jades_prospector_labels.fits
+  fusion_checkpoint: encoder_fusion/outputs/fusion_dja_image_attn_spectrum_attn/version_*/checkpoints/*R10=*.ckpt
+  target_columns: [log1pz, logmass, logsfr100, gas_logz, av]
+  log_columns: [av]
+  grades: [1, 2, 3]
+  min_sn50: 0.0
+  frac_valid_pix: 0.5
+  min_redshift: null
+  max_redshift: null
+  max_gas_logz: 0.30                # some extreme outliers in metallicity; null disables this cut \todo change this to maybe metal to distinguish from redshift
+  z_consistent: true
+  split: [0.50, 0.25, 0.25]
+  split_seed: 0
+  batch_size: 64
+  num_workers: 0
+  embedding_batch_size: 128
+  embedding_device: auto
+
+trainer:
+  max_epochs: 600
+  accelerator: auto
+  devices: 1
+  precision: 32-true
+  gradient_clip_val: 5.0
+  gradient_clip_algorithm: norm
+  enable_progress_bar: false
+  log_every_n_steps: 1
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: outputs/
+      name: flow_jades_full
+  callbacks:
+    - class_path: flow.model.flow.EpochPrinter
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_nll
+        mode: min
+        save_top_k: 1
+        filename: "epoch={epoch}-val_nll={val_nll:.4f}"
+        auto_insert_metric_name: false
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_nll
+        mode: min
+        patience: 30
+        min_delta: 1.0e-4
